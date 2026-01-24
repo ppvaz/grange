@@ -11,6 +11,7 @@ Evolver coordinates multiple specialized AI agents that work together to transfo
 - Bash
 - `inotifywait` (inotify-tools package)
 - `opencode` CLI tool
+- `claude` CLI (optional, for selective agent routing)
 
 ## Usage
 
@@ -29,6 +30,27 @@ Evolver coordinates multiple specialized AI agents that work together to transfo
 # Check current state
 ./evolve.sh status
 ```
+
+### Selective Claude Routing
+
+By default, all agents use `opencode`. You can route specific agents to Claude Opus 4.5 via the `CLAUDE_AGENTS` environment variable:
+
+```bash
+CLAUDE_AGENTS="Oracle,Visionary" ./evolve.sh start
+```
+
+**Why route only some agents to Claude?**
+
+| Agent | Recommendation | Rationale |
+|-------|----------------|-----------|
+| **Oracle** | Claude | Critical completion decision. Wrong call = premature termination or infinite loop. High-stakes, low-frequency (~12/hour). |
+| **Visionary** | Claude | Sophisticated pattern recognition across multiple signal files. Runs infrequently (~2-4/hour after 3+ signals). |
+| **Executor** | opencode | Runs frequently. Can iterate on mistakes. A "dumber" model with more tries works fine. |
+| **Planner** | opencode | Runs frequently. Tasks get validated by Critic anyway. |
+| **Critic** | opencode | Simple alignment checks. High frequency, low complexity. |
+| **Gap Finder** | opencode | Reviews one task at a time. Errors are recoverable. |
+
+This approach optimizes cost and latency while preserving quality where it matters most.
 
 ## Architecture
 

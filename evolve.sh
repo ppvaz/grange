@@ -1,6 +1,10 @@
 #!/bin/bash
 # evolve.sh - Event-driven multi-agent system
 # Agents react to file changes instead of polling on timers
+#
+# Environment variables:
+#   CLAUDE_AGENTS - Comma-separated list of agents to run with Claude instead of opencode
+#                   Example: CLAUDE_AGENTS="oracle,visionary" ./evolve.sh start
 
 set -euo pipefail
 
@@ -170,18 +174,30 @@ run_agent() {
     return 0
   fi
   
-  log "${BLUE}[$name]${NC} Running..."
   date +%s > "$time_file"
-  
-  if run_with_timeout 300 opencode run "$prompt" 2>&1 | tee -a "$LOG_FILE"; then
-    log "${GREEN}[$name]${NC} Completed"
+
+  # Model selection based on CLAUDE_AGENTS env var
+  local use_claude=false
+  if [[ -n "${CLAUDE_AGENTS:-}" && ",${CLAUDE_AGENTS}," == *",${name},"* ]]; then
+    use_claude=true
+    log "${BLUE}[$name]${NC} Running with Claude..."
   else
-    local exit_code=$?
-    if [[ $exit_code -eq 124 ]]; then
-      log "${RED}[$name]${NC} TIMEOUT after 300s"
-    else
-      log "${RED}[$name]${NC} Failed with exit code $exit_code"
-    fi
+    log "${BLUE}[$name]${NC} Running with opencode..."
+  fi
+
+  local cmd_result=0
+  if [[ "$use_claude" == true ]]; then
+    run_with_timeout 300 claude --dangerously-skip-permissions -p "$prompt" 2>&1 | tee -a "$LOG_FILE" || cmd_result=$?
+  else
+    run_with_timeout 300 opencode run "$prompt" 2>&1 | tee -a "$LOG_FILE" || cmd_result=$?
+  fi
+
+  if [[ $cmd_result -eq 0 ]]; then
+    log "${GREEN}[$name]${NC} Completed"
+  elif [[ $cmd_result -eq 124 ]]; then
+    log "${RED}[$name]${NC} TIMEOUT after 300s"
+  else
+    log "${RED}[$name]${NC} Failed with exit code $cmd_result"
   fi
   
   flock -u 200
