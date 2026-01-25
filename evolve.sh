@@ -406,6 +406,15 @@ You have ~10 minutes. If you're working on a complex task and can't complete it:
    - What remains to be done
    - Any relevant file paths or context
 2. The next Executor run will resume from your checkpoint."
+
+  # Self-chaining: if there are more pending tasks, trigger another executor
+  sleep 3  # Brief pause to let commits/file changes settle
+  if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null; then
+    if [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+      log "${BLUE}[Executor]${NC} More tasks pending, re-triggering..."
+      executor &
+    fi
+  fi
 }
 
 planner() {
