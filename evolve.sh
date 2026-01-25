@@ -177,6 +177,12 @@ check_done() {
   [[ -f "$WORK_DIR/DONE.md" ]] && return 0 || return 1
 }
 
+# Check if all tasks in PLAN.md are complete (no remaining [ ] tasks)
+all_tasks_complete() {
+  # Returns 0 (true) if no incomplete tasks exist
+  ! grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null
+}
+
 # Atomic signal counter operations (fixes subshell scope issue)
 get_signal_count() {
   cat "$SIGNAL_FILE" 2>/dev/null || echo "0"
@@ -393,11 +399,13 @@ CHECKLIST (all must be true to declare done):
 5. If the project has tests, run them - must pass
 
 DECISION:
-- If ANY check fails: do nothing and exit silently
 - If ALL checks pass: create DONE.md containing:
   - Summary of what was achieved (2-3 sentences)
   - List of completed tasks from PLAN.md
   - Build/test status confirmation
+- If ANY check fails: add a task to PLAN.md describing what needs to be fixed.
+  Format: '- [ ] Fix: <specific issue found>'
+  Be specific (e.g., '- [ ] Fix: test_auth failing - expected 200, got 401')
 
 Take your time. You have 15 minutes." "$ORACLE_TIMEOUT"
 }
@@ -570,8 +578,13 @@ watch_commits() {
     gap_finder &
     sleep 5
     planner &
-    sleep 10
-    oracle &
+
+    # Only invoke Oracle when all tasks are complete (saves expensive Opus calls)
+    if all_tasks_complete; then
+      log "${BLUE}[Watcher]${NC} All tasks complete, invoking Oracle..."
+      sleep 5
+      oracle &
+    fi
   done < <(inotifywait -m -e close_write,moved_to,create "$(dirname "$GIT_SIGNAL")" 2>/dev/null)
 }
 
@@ -588,12 +601,18 @@ heartbeat() {
     sleep "$interval"
     log "${BLUE}[Heartbeat]${NC} Periodic check..."
 
-    # Only run Planner if no Executor is currently running
-    # (Oracle is not needed here - it runs on every commit via watch_commits)
+    # Run Planner if no Executor running (Planner enforces VISION, may add fix tasks)
     if [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
       planner &
     else
       log "${YELLOW}[Heartbeat]${NC} Executor running, skipping Planner"
+    fi
+
+    # Safety net: if all tasks complete, also invoke Oracle
+    if all_tasks_complete; then
+      log "${BLUE}[Heartbeat]${NC} All tasks complete, invoking Oracle..."
+      sleep 5
+      oracle &
     fi
   done
 }
