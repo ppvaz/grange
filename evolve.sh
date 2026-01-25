@@ -434,7 +434,36 @@ critic() {
 }
 
 gap_finder() {
-  run_agent "Gap" "You are the Gap Finder agent. Pick a random completed task (- [x]) from PLAN.md. Review its implementation against VISION.md. If the implementation drifted from the vision's intent, add a corrective task to PLAN.md and log the drift to DRIFT.md. If implementation is solid, do nothing."
+  local commit_hash="${1:-}"
+  local commit_context=""
+
+  if [[ -n "$commit_hash" ]]; then
+    commit_context="
+FOCUS: Review commit $commit_hash
+Run: git show --stat $commit_hash
+Then read the changed files to understand what was done."
+  else
+    commit_context="
+FOCUS: Review the most recent commit.
+Run: git log -1 --stat
+Then read the changed files to understand what was done."
+  fi
+
+  run_agent "Gap" "You are the Gap Finder agent.
+
+TASK: Check if the latest commit drifted from VISION.md intent.
+${commit_context}
+
+STEPS (be quick - you have 10 minutes):
+1. Get the commit diff/stats
+2. Read VISION.md to understand the goal
+3. Check: Does this commit align with the vision?
+
+IF DRIFT DETECTED:
+- Add to DRIFT.md with: commit hash, what drifted, why it matters
+- Add corrective task to PLAN.md: '- [ ] Fix drift: <specific issue>'
+
+IF ALIGNED: Do nothing. Don't log success."
 }
 
 oracle() {
@@ -657,7 +686,7 @@ watch_commits() {
     # After a commit: continue executing, check gaps, plan if needed
     executor &
     sleep 3
-    gap_finder &
+    gap_finder "$current_commit" &
     sleep 3
     planner &
 
