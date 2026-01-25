@@ -420,7 +420,7 @@ You have ~10 minutes. If you're working on a complex task and can't complete it:
 planner() {
   # Skip if too many pending tasks already
   local pending_count
-  pending_count=$(grep -c '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null || echo 0)
+  pending_count=$(grep -c '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null) || pending_count=0
   if (( pending_count >= MAX_PENDING_TASKS )); then
     log "${YELLOW}[Planner]${NC} Skipped: $pending_count pending tasks (max: $MAX_PENDING_TASKS)"
     return 0
