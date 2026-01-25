@@ -31,6 +31,7 @@ DEBOUNCE_INTERVAL="${DEBOUNCE_INTERVAL:-60}"     # 60 seconds between watcher tr
 # Concurrency control
 MAX_AGENTS="${MAX_AGENTS:-2}"                    # Maximum concurrent agents
 AGENT_COUNT_FILE="$LOCK_DIR/agent_count"
+MAX_PENDING_TASKS="${MAX_PENDING_TASKS:-5}"      # Skip Planner if queue is full
 
 # Checkpointing
 CHECKPOINT_DIR="$LOCK_DIR/checkpoints"
@@ -408,6 +409,14 @@ You have ~10 minutes. If you're working on a complex task and can't complete it:
 }
 
 planner() {
+  # Skip if too many pending tasks already
+  local pending_count
+  pending_count=$(grep -c '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null || echo 0)
+  if (( pending_count >= MAX_PENDING_TASKS )); then
+    log "${YELLOW}[Planner]${NC} Skipped: $pending_count pending tasks (max: $MAX_PENDING_TASKS)"
+    return 0
+  fi
+
   run_agent "Planner" "You are the Planner agent. Review VISION.md and PLAN.md. Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md."
 }
 
@@ -619,10 +628,12 @@ watch_commits() {
     local current_commit
     current_commit=$(git rev-parse HEAD 2>/dev/null || echo "none")
     log "${BLUE}[Watcher]${NC} New commit detected: ${current_commit:0:8}"
-    
-    # After a commit, evaluate and plan next steps
+
+    # After a commit: continue executing, check gaps, plan if needed
+    executor &
+    sleep 3
     gap_finder &
-    sleep 5
+    sleep 3
     planner &
 
     # Only invoke Oracle when all tasks are complete (saves expensive Opus calls)
@@ -647,11 +658,15 @@ heartbeat() {
     sleep "$interval"
     log "${BLUE}[Heartbeat]${NC} Periodic check..."
 
-    # Run Planner if no Executor running (Planner enforces VISION, may add fix tasks)
+    # Primary: Run Executor if pending tasks and not already running
+    if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+      executor &
+      sleep 5
+    fi
+
+    # Secondary: Run Planner if Executor not running (auto-skips if queue full)
     if [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
       planner &
-    else
-      log "${YELLOW}[Heartbeat]${NC} Executor running, skipping Planner"
     fi
 
     # Safety net: if all tasks complete, also invoke Oracle
