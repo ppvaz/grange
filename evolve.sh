@@ -286,7 +286,7 @@ run_agent() {
     else
       log "${YELLOW}[$name]${NC} Already starting, skipping"
     fi
-    return 0
+    return 2  # Distinct code for "skipped" - prevents self-chaining loop
   fi
 
   # Write PID to marker for stale detection
