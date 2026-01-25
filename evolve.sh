@@ -18,6 +18,7 @@ WORK_DIR="${WORK_DIR:-.}"
 LOG_FILE="$WORK_DIR/LOG.md"
 LOCK_DIR="$WORK_DIR/.locks"
 SIGNAL_FILE="$WORK_DIR/.locks/signal_count"
+TIMEOUT_COUNT_FILE="$LOCK_DIR/timeout_count"
 GIT_SIGNAL="$WORK_DIR/.git-commit-signal"
 MIN_INTERVAL=30  # Minimum seconds between runs of same agent
 
@@ -112,6 +113,8 @@ init_workspace() {
   [[ -f "$SIGNAL_FILE" ]] || echo "0" > "$SIGNAL_FILE"
   # Initialize agent count file
   [[ -f "$AGENT_COUNT_FILE" ]] || echo "0" > "$AGENT_COUNT_FILE"
+  # Initialize timeout count file
+  [[ -f "$TIMEOUT_COUNT_FILE" ]] || echo "0" > "$TIMEOUT_COUNT_FILE"
 
   # Clean up stale run markers from previous crashes/kills
   # Only remove markers where the owning process is no longer running
@@ -202,6 +205,27 @@ reset_signal_count() {
     flock -x 201
     echo "0" > "$SIGNAL_FILE"
   ) 201>"$SIGNAL_FILE.lock"
+}
+
+# Timeout counter operations (tracks consecutive agent timeouts)
+get_timeout_count() {
+  cat "$TIMEOUT_COUNT_FILE" 2>/dev/null || echo "0"
+}
+
+add_timeout_count() {
+  local amount=${1:-1}
+  (
+    flock -x 201
+    local current=$(cat "$TIMEOUT_COUNT_FILE" 2>/dev/null || echo "0")
+    echo $((current + amount)) > "$TIMEOUT_COUNT_FILE"
+  ) 201>"$TIMEOUT_COUNT_FILE.lock"
+}
+
+reset_timeout_count() {
+  (
+    flock -x 201
+    echo "0" > "$TIMEOUT_COUNT_FILE"
+  ) 201>"$TIMEOUT_COUNT_FILE.lock"
 }
 
 # Global concurrency control - limit total running agents
@@ -333,8 +357,17 @@ run_agent() {
 
   if [[ $cmd_result -eq 0 ]]; then
     log "${GREEN}[$name]${NC} Completed"
+    reset_timeout_count  # Reset on success
   elif [[ $cmd_result -eq 124 ]]; then
     log "${RED}[$name]${NC} TIMEOUT after ${timeout}s"
+    add_timeout_count 1
+    local timeout_count
+    timeout_count=$(get_timeout_count)
+    if (( timeout_count >= 3 )); then
+      log "${YELLOW}[System]${NC} Multiple timeouts ($timeout_count), triggering Visionary..."
+      reset_timeout_count
+      visionary "TIMEOUT ALERT: Multiple agents timed out ($timeout_count consecutive). Consider if the vision is too vague or ambitious, or if tasks are too large to complete in the allotted time." &
+    fi
   else
     log "${RED}[$name]${NC} Failed with exit code $cmd_result"
   fi
@@ -411,6 +444,8 @@ Take your time. You have 15 minutes." "$ORACLE_TIMEOUT"
 }
 
 visionary() {
+  local trigger_context="${1:-}"  # Optional context about why Visionary was triggered
+
   # Build context about previous observations to avoid repetition
   local history_context=""
   if [[ -f "$WORK_DIR/VISION_REVIEW.md" ]]; then
@@ -425,8 +460,19 @@ $previous_observations
     fi
   fi
 
-  run_agent "Visionary" "You are the Visionary agent. Review VISION.md, PLAN.md, BLOCKERS.md, CUTS.md, and DRIFT.md for patterns.
+  # Build trigger context section if provided
+  local trigger_section=""
+  if [[ -n "$trigger_context" ]]; then
+    trigger_section="
 
+TRIGGER CONTEXT:
+$trigger_context
+
+"
+  fi
+
+  run_agent "Visionary" "You are the Visionary agent. Review VISION.md, PLAN.md, BLOCKERS.md, CUTS.md, and DRIFT.md for patterns.
+${trigger_section}
 Look for signals that the vision needs refinement:
 - Recurring blockers suggesting the vision is unrealistic
 - Many cuts suggesting scope creep or misalignment  
@@ -644,7 +690,11 @@ main() {
     cat "$WORK_DIR/DONE.md"
     exit 0
   fi
-  
+
+  # Validate vision before starting work
+  log "${BLUE}[Main]${NC} Validating vision..."
+  visionary "STARTUP CHECK: No work has begun yet. Focus on whether VISION.md is specific, measurable, and actionable. Flag any issues that would cause agents to struggle."
+
   # Trap for cleanup
   trap 'log "${YELLOW}[Main]${NC} Shutting down..."; kill $(jobs -p) 2>/dev/null; exit 0' SIGINT SIGTERM
   
