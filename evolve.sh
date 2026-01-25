@@ -3,8 +3,13 @@
 # Agents react to file changes instead of polling on timers
 #
 # Environment variables:
-#   CLAUDE_AGENTS - Comma-separated list of agents to run with Claude instead of opencode
-#                   Example: CLAUDE_AGENTS="oracle,visionary" ./evolve.sh start
+#   ZAI_API_KEY      - Z.ai API key for GLM-4.7 (default: from opencode config)
+#   SMART_AGENTS     - Agents using Opus 4.5 (default: "Oracle,Visionary")
+#   CLAUDE_DEBUG     - Enable debug logging (default: true)
+#   AGENT_TIMEOUT    - Default timeout in seconds (default: 600)
+#   ORACLE_TIMEOUT   - Timeout for Oracle (default: 900)
+#   DEBOUNCE_INTERVAL- Min seconds between triggers (default: 60)
+#   MAX_AGENTS       - Max concurrent agents (default: 2)
 
 set -euo pipefail
 
@@ -15,6 +20,25 @@ LOCK_DIR="$WORK_DIR/.locks"
 SIGNAL_FILE="$WORK_DIR/.locks/signal_count"
 GIT_SIGNAL="$WORK_DIR/.git-commit-signal"
 MIN_INTERVAL=30  # Minimum seconds between runs of same agent
+
+# Timeout configuration (in seconds)
+DEFAULT_TIMEOUT=600                              # 10 minutes default
+AGENT_TIMEOUT="${AGENT_TIMEOUT:-$DEFAULT_TIMEOUT}"
+ORACLE_TIMEOUT="${ORACLE_TIMEOUT:-900}"          # 15 minutes for thorough check
+DEBOUNCE_INTERVAL="${DEBOUNCE_INTERVAL:-60}"     # 60 seconds between watcher triggers
+
+# Concurrency control
+MAX_AGENTS="${MAX_AGENTS:-2}"                    # Maximum concurrent agents
+AGENT_COUNT_FILE="$LOCK_DIR/agent_count"
+
+# Checkpointing
+CHECKPOINT_DIR="$LOCK_DIR/checkpoints"
+
+# Dual-API configuration
+ZAI_API_KEY="${ZAI_API_KEY:-REDACTED_API_KEY}"
+ZAI_BASE_URL="https://api.z.ai/api/anthropic"
+SMART_AGENTS="${SMART_AGENTS:-Oracle,Visionary}"  # These use native Anthropic/Opus
+CLAUDE_DEBUG="${CLAUDE_DEBUG:-false}"
 
 # Colors
 RED='\033[0;31m'
@@ -27,31 +51,41 @@ log() {
   echo -e "$(date +%H:%M:%S) $1" | tee -a "$LOG_FILE"
 }
 
-# Timeout wrapper with fallback for systems without timeout command
+# Timeout wrapper with graceful shutdown (SIGTERM first, then SIGKILL)
+# Gives process 30 seconds to clean up after SIGTERM before SIGKILL
 run_with_timeout() {
   local seconds=$1
+  local grace_period=30  # Seconds to wait after SIGTERM before SIGKILL
   shift
-  
+
   if command -v timeout &> /dev/null; then
-    timeout "$seconds" "$@"
+    # Use timeout with --signal and --kill-after for graceful shutdown
+    # SIGTERM first, then SIGKILL after grace period
+    timeout --signal=TERM --kill-after="$grace_period" "$seconds" "$@"
   else
     # Fallback using background process + sleep + kill
     "$@" &
     local pid=$!
-    local killed_by_watchdog=false
-    
+
     (
       sleep "$seconds"
       if kill -0 "$pid" 2>/dev/null; then
+        # Graceful shutdown: SIGTERM first
         kill -TERM "$pid" 2>/dev/null
+        # Wait for grace period
+        sleep "$grace_period"
+        # Force kill if still running
+        if kill -0 "$pid" 2>/dev/null; then
+          kill -KILL "$pid" 2>/dev/null
+        fi
       fi
     ) &
     local watchdog=$!
-    
+
     # Wait for main process and capture its exit status
     local exit_status=0
     wait "$pid" 2>/dev/null || exit_status=$?
-    
+
     # Clean up watchdog
     if kill -0 "$watchdog" 2>/dev/null; then
       # Watchdog still running = process exited naturally before timeout
@@ -70,12 +104,42 @@ run_with_timeout() {
 # Ensure required files exist
 init_workspace() {
   mkdir -p "$LOCK_DIR"
+  mkdir -p "$CHECKPOINT_DIR"
   touch "$WORK_DIR/VISION.md" "$WORK_DIR/PLAN.md" "$LOG_FILE"
   [[ -f "$WORK_DIR/BLOCKERS.md" ]] || touch "$WORK_DIR/BLOCKERS.md"
   [[ -f "$WORK_DIR/CUTS.md" ]] || touch "$WORK_DIR/CUTS.md"
   [[ -f "$WORK_DIR/DRIFT.md" ]] || touch "$WORK_DIR/DRIFT.md"
   [[ -f "$SIGNAL_FILE" ]] || echo "0" > "$SIGNAL_FILE"
-  
+  # Initialize agent count file
+  [[ -f "$AGENT_COUNT_FILE" ]] || echo "0" > "$AGENT_COUNT_FILE"
+
+  # Clean up stale run markers from previous crashes/kills
+  # Only remove markers where the owning process is no longer running
+  local stale_count=0
+  for marker in "$LOCK_DIR"/running_*; do
+    [[ -d "$marker" ]] || continue
+    local pid_file="$marker/pid"
+    if [[ -f "$pid_file" ]]; then
+      local pid=$(cat "$pid_file")
+      if ! kill -0 "$pid" 2>/dev/null; then
+        # Process is dead, marker is stale
+        rm -rf "$marker"
+        stale_count=$((stale_count + 1))
+      fi
+    else
+      # No PID file = old format or corrupted, remove it
+      rm -rf "$marker"
+      stale_count=$((stale_count + 1))
+    fi
+  done
+  if (( stale_count > 0 )); then
+    log "${YELLOW}[Setup]${NC} Cleaned $stale_count stale run marker(s)"
+    # Recalculate agent count based on remaining valid markers
+    local active_count
+    active_count=$(find "$LOCK_DIR" -maxdepth 1 -type d -name "running_*" 2>/dev/null | wc -l)
+    echo "$active_count" > "$AGENT_COUNT_FILE"
+  fi
+
   # Setup git hook if in a git repo
   setup_git_hook
 }
@@ -134,15 +198,56 @@ reset_signal_count() {
   ) 201>"$SIGNAL_FILE.lock"
 }
 
+# Global concurrency control - limit total running agents
+acquire_agent_slot() {
+  local max_wait=300  # Wait up to 5 minutes for a slot
+  local waited=0
+
+  while (( waited < max_wait )); do
+    local acquired=false
+    (
+      flock -x 201
+      local count=$(cat "$AGENT_COUNT_FILE" 2>/dev/null || echo 0)
+      if (( count < MAX_AGENTS )); then
+        echo $((count + 1)) > "$AGENT_COUNT_FILE"
+        exit 0  # Got slot
+      fi
+      exit 1  # No slot available
+    ) 201>"$AGENT_COUNT_FILE.lock"
+
+    if [[ $? -eq 0 ]]; then
+      return 0  # Successfully acquired slot
+    fi
+
+    sleep 5
+    waited=$((waited + 5))
+  done
+
+  return 1  # Timed out waiting for slot
+}
+
+release_agent_slot() {
+  (
+    flock -x 201
+    local count=$(cat "$AGENT_COUNT_FILE" 2>/dev/null || echo 1)
+    if (( count > 0 )); then
+      echo $((count - 1)) > "$AGENT_COUNT_FILE"
+    fi
+  ) 201>"$AGENT_COUNT_FILE.lock"
+}
+
 # Rate-limited agent runner
 # Prevents same agent from running more than once per MIN_INTERVAL
+# Args: name, prompt, [timeout_seconds]
 run_agent() {
   local name=$1
   local prompt=$2
+  local timeout=${3:-$AGENT_TIMEOUT}  # Optional timeout, defaults to AGENT_TIMEOUT
   local lock_file="$LOCK_DIR/${name}.lock"
   local time_file="$LOCK_DIR/${name}.last"
   local run_marker="$LOCK_DIR/running_${name}"
-  
+  local agent_log="$LOCK_DIR/${name}.log"  # Per-agent log file
+
   # Atomic check for DONE + acquire run marker (fixes race condition)
   if check_done || ! mkdir "$run_marker" 2>/dev/null; then
     if check_done; then
@@ -152,10 +257,13 @@ run_agent() {
     fi
     return 0
   fi
-  
+
+  # Write PID to marker for stale detection
+  echo $$ > "$run_marker/pid"
+
   # Cleanup run marker on exit
-  trap "rmdir '$run_marker' 2>/dev/null || true" RETURN
-  
+  trap "rm -rf '$run_marker' 2>/dev/null || true; release_agent_slot" RETURN
+
   # Check rate limit
   if [[ -f "$time_file" ]]; then
     local last_run=$(cat "$time_file")
@@ -166,40 +274,65 @@ run_agent() {
       return 0
     fi
   fi
-  
+
+  # Acquire global concurrency slot
+  log "${YELLOW}[$name]${NC} Waiting for agent slot..."
+  if ! acquire_agent_slot; then
+    log "${RED}[$name]${NC} Timed out waiting for agent slot"
+    return 1
+  fi
+
   # Acquire lock (non-blocking)
   exec 200>"$lock_file"
   if ! flock -n 200; then
     log "${YELLOW}[$name]${NC} Already running, skipping"
+    release_agent_slot
     return 0
   fi
-  
+
   date +%s > "$time_file"
 
-  # Model selection based on CLAUDE_AGENTS env var
-  local use_claude=false
-  if [[ -n "${CLAUDE_AGENTS:-}" && ",${CLAUDE_AGENTS}," == *",${name},"* ]]; then
-    use_claude=true
-    log "${BLUE}[$name]${NC} Running with Claude..."
-  else
-    log "${BLUE}[$name]${NC} Running with opencode..."
+  # Determine if this is a "smart" agent (Opus) or "iterative" agent (GLM-4.7)
+  local is_smart_agent=false
+  if [[ ",${SMART_AGENTS}," == *",${name},"* ]]; then
+    is_smart_agent=true
+  fi
+
+  # Rotate agent log if too large (>1MB)
+  if [[ -f "$agent_log" ]] && (( $(stat -c%s "$agent_log" 2>/dev/null || stat -f%z "$agent_log" 2>/dev/null || echo 0) > 1048576 )); then
+    mv "$agent_log" "${agent_log}.old"
   fi
 
   local cmd_result=0
-  if [[ "$use_claude" == true ]]; then
-    run_with_timeout 300 claude --dangerously-skip-permissions -p "$prompt" 2>&1 | tee -a "$LOG_FILE" || cmd_result=$?
+  echo "=== Run started at $(date) ===" >> "$agent_log"
+
+  if [[ "$is_smart_agent" == true ]]; then
+    # Smart agents: Opus 4.5 via native Anthropic (uses Claude subscription)
+    log "${BLUE}[$name]${NC} Running with Claude Opus 4.5 (timeout: ${timeout}s)..."
+    (
+      unset ANTHROPIC_BASE_URL  # Use default Anthropic
+      [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
+      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model opus
+    ) 2>&1 | tee -a "$LOG_FILE" "$agent_log" || cmd_result=$?
   else
-    run_with_timeout 300 opencode run "$prompt" 2>&1 | tee -a "$LOG_FILE" || cmd_result=$?
+    # Iterative agents: GLM-4.7 via Z.ai
+    log "${BLUE}[$name]${NC} Running with GLM-4.7 via Z.ai (timeout: ${timeout}s)..."
+    (
+      export ANTHROPIC_BASE_URL="$ZAI_BASE_URL"
+      export ANTHROPIC_API_KEY="$ZAI_API_KEY"
+      [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
+      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model sonnet
+    ) 2>&1 | tee -a "$LOG_FILE" "$agent_log" || cmd_result=$?
   fi
 
   if [[ $cmd_result -eq 0 ]]; then
     log "${GREEN}[$name]${NC} Completed"
   elif [[ $cmd_result -eq 124 ]]; then
-    log "${RED}[$name]${NC} TIMEOUT after 300s"
+    log "${RED}[$name]${NC} TIMEOUT after ${timeout}s"
   else
     log "${RED}[$name]${NC} Failed with exit code $cmd_result"
   fi
-  
+
   flock -u 200
 }
 
@@ -208,7 +341,31 @@ run_agent() {
 # ============================================
 
 executor() {
-  run_agent "Executor" "You are the Executor agent. Do the most important incomplete task (- [ ]) in PLAN.md that serves VISION.md. After completing, mark it done (- [x]) and commit with a descriptive message. If blocked, document in BLOCKERS.md. Focus on one task only."
+  # Build checkpoint context if a checkpoint exists
+  local checkpoint_file="$CHECKPOINT_DIR/executor.md"
+  local checkpoint_context=""
+  if [[ -f "$checkpoint_file" ]]; then
+    checkpoint_context="
+
+IMPORTANT - RESUME FROM CHECKPOINT:
+A previous Executor run was interrupted. Here is its progress:
+---
+$(cat "$checkpoint_file")
+---
+Continue from where it left off. Delete the checkpoint file ($checkpoint_file) once you've resumed and made progress.
+"
+  fi
+
+  run_agent "Executor" "You are the Executor agent. Do the most important incomplete task (- [ ]) in PLAN.md that serves VISION.md. After completing, mark it done (- [x]) and commit with a descriptive message. If blocked, document in BLOCKERS.md. Focus on one task only.
+${checkpoint_context}
+TIMEOUT HANDLING:
+You have ~10 minutes. If you're working on a complex task and can't complete it:
+1. Save your progress to $checkpoint_file with:
+   - Which task you were working on
+   - What you've completed so far
+   - What remains to be done
+   - Any relevant file paths or context
+2. The next Executor run will resume from your checkpoint."
 }
 
 planner() {
@@ -224,7 +381,25 @@ gap_finder() {
 }
 
 oracle() {
-  run_agent "Oracle" "You are the Oracle agent. Review VISION.md, PLAN.md, and the codebase holistically. If the vision is fully achieved with no remaining work needed, create DONE.md with a summary of what was accomplished. Be certain before declaring done - check thoroughly. If not complete, do nothing."
+  run_agent "Oracle" "You are the Oracle agent.
+
+TASK: Determine if the vision is FULLY achieved.
+
+CHECKLIST (all must be true to declare done):
+1. Read VISION.md - understand the goal
+2. Read PLAN.md - verify ALL tasks are marked [x] complete (no remaining [ ] tasks)
+3. Check BLOCKERS.md - must be empty or all issues resolved
+4. If the project has a build command, run it - must pass with no errors
+5. If the project has tests, run them - must pass
+
+DECISION:
+- If ANY check fails: do nothing and exit silently
+- If ALL checks pass: create DONE.md containing:
+  - Summary of what was achieved (2-3 sentences)
+  - List of completed tasks from PLAN.md
+  - Build/test status confirmation
+
+Take your time. You have 15 minutes." "$ORACLE_TIMEOUT"
 }
 
 visionary() {
@@ -277,11 +452,23 @@ If everything looks healthy and coherent, or you've already noted the same patte
 # Watch for file changes and trigger appropriate agents
 watch_plan() {
   log "${GREEN}[Watcher]${NC} Monitoring PLAN.md for changes..."
+  local last_trigger=0
+
   while read -r dir event file; do
     if check_done; then
       log "${GREEN}[Watcher]${NC} DONE.md exists, stopping plan watcher"
       break
     fi
+
+    # Debounce: skip if triggered too recently
+    local now=$(date +%s)
+    local elapsed=$((now - last_trigger))
+    if (( elapsed < DEBOUNCE_INTERVAL )); then
+      log "${YELLOW}[Watcher]${NC} PLAN.md change debounced (${elapsed}s < ${DEBOUNCE_INTERVAL}s)"
+      continue
+    fi
+    last_trigger=$now
+
     log "${BLUE}[Watcher]${NC} PLAN.md changed, triggering agents..."
     executor &
     sleep 2
@@ -291,11 +478,23 @@ watch_plan() {
 
 watch_vision() {
   log "${GREEN}[Watcher]${NC} Monitoring VISION.md for changes..."
+  local last_trigger=0
+
   while read -r dir event file; do
     if check_done; then
       log "${GREEN}[Watcher]${NC} DONE.md exists, stopping vision watcher"
       break
     fi
+
+    # Debounce: skip if triggered too recently
+    local now=$(date +%s)
+    local elapsed=$((now - last_trigger))
+    if (( elapsed < DEBOUNCE_INTERVAL )); then
+      log "${YELLOW}[Watcher]${NC} VISION.md change debounced (${elapsed}s < ${DEBOUNCE_INTERVAL}s)"
+      continue
+    fi
+    last_trigger=$now
+
     log "${BLUE}[Watcher]${NC} VISION.md changed, re-evaluating plan..."
     critic &
     sleep 5
@@ -378,19 +577,24 @@ watch_commits() {
 
 # Periodic heartbeat for agents that need regular checks
 heartbeat() {
-  local interval=${1:-300}  # Default 5 minutes
-  
+  local interval=${1:-600}  # Default 10 minutes (was 5, too aggressive)
+
   while true; do
     if check_done; then
       log "${GREEN}[Heartbeat]${NC} DONE.md exists, stopping heartbeat"
       break
     fi
-    
+
     sleep "$interval"
     log "${BLUE}[Heartbeat]${NC} Periodic check..."
-    oracle &
-    sleep 30
-    planner &  # Ensure forward progress
+
+    # Only run Planner if no Executor is currently running
+    # (Oracle is not needed here - it runs on every commit via watch_commits)
+    if [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+      planner &
+    else
+      log "${YELLOW}[Heartbeat]${NC} Executor running, skipping Planner"
+    fi
   done
 }
 
@@ -411,8 +615,8 @@ main() {
     exit 1
   fi
   
-  if ! command -v opencode &> /dev/null; then
-    log "${RED}[Error]${NC} opencode not found"
+  if ! command -v claude &> /dev/null; then
+    log "${RED}[Error]${NC} claude CLI not found"
     exit 1
   fi
   
@@ -432,7 +636,7 @@ main() {
   watch_vision &
   watch_commits &
   watch_signals &
-  heartbeat 300 &
+  heartbeat 600 &
   
   # Initial kick-off if PLAN.md has tasks
   if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null; then

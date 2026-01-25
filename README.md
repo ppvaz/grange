@@ -100,3 +100,13 @@ Agents are triggered by file system events rather than polling:
 - **Race-condition safe**: File locking for atomic operations
 - **Rate-limited**: Prevents agent thrashing
 - **Git-integrated**: Post-commit hooks signal reactive agents
+
+## Visions
+
+The `visions/` directory contains reusable multi-stage vision templates for common workflows:
+
+| Vision | Purpose |
+|--------|---------|
+| [ike-v3](visions/ike-v3/) | Institutional Knowledge Extractor - extract implicit codebase knowledge into structured catalogues |
+
+To use a vision, copy its stage files to your project and follow the README instructions.
