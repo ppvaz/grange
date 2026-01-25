@@ -302,7 +302,7 @@ run_agent() {
     local elapsed=$((now - last_run))
     if (( elapsed < MIN_INTERVAL )); then
       log "${YELLOW}[$name]${NC} Rate limited (${elapsed}s < ${MIN_INTERVAL}s)"
-      return 0
+      return 2  # Distinct code for "skipped"
     fi
   fi
 
@@ -318,7 +318,7 @@ run_agent() {
   if ! flock -n 200; then
     log "${YELLOW}[$name]${NC} Already running, skipping"
     release_agent_slot
-    return 0
+    return 2  # Distinct code for "skipped"
   fi
 
   date +%s > "$time_file"
@@ -406,13 +406,16 @@ You have ~10 minutes. If you're working on a complex task and can't complete it:
    - What remains to be done
    - Any relevant file paths or context
 2. The next Executor run will resume from your checkpoint."
+  local agent_result=$?
 
-  # Self-chaining: if there are more pending tasks, trigger another executor
-  sleep 3  # Brief pause to let commits/file changes settle
-  if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null; then
-    if [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
-      log "${BLUE}[Executor]${NC} More tasks pending, re-triggering..."
-      executor &
+  # Self-chaining: only if run_agent actually ran (not skipped)
+  if [[ $agent_result -eq 0 ]]; then
+    sleep 3  # Brief pause to let commits/file changes settle
+    if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null; then
+      if [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+        log "${BLUE}[Executor]${NC} More tasks pending, re-triggering..."
+        executor &
+      fi
     fi
   fi
 }
