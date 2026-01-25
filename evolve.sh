@@ -610,6 +610,22 @@ watch_signals() {
         reset_signal_count
         visionary &
       fi
+
+      # Trigger digest on high accumulated observations (separate from Visionary threshold)
+      # Uses digest markers to check for 10+ new lines across observation files
+      if [[ -x "./digest.sh" ]]; then
+        local digest_new=0
+        local markers_file="$LOCK_DIR/digest_markers"
+        for f in BLOCKERS.md CUTS.md DRIFT.md VISION_REVIEW.md; do
+          local curr_lines=$(wc -l < "$WORK_DIR/$f" 2>/dev/null || echo 0)
+          local marker=$(grep "^${f}:" "$markers_file" 2>/dev/null | cut -d: -f2 || echo 0)
+          digest_new=$((digest_new + curr_lines - ${marker:-0}))
+        done
+        if (( digest_new >= 10 )); then
+          log "${BLUE}[Watcher]${NC} High observation accumulation ($digest_new lines), triggering digest..."
+          ./digest.sh &
+        fi
+      fi
     fi
     
     last_blockers=$curr_blockers
