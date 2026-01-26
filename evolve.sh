@@ -299,6 +299,10 @@ run_agent() {
   if [[ -f "$time_file" ]]; then
     local last_run=$(cat "$time_file")
     local now=$(date +%s)
+    # Validate last_run is numeric (handles stale ISO date format)
+    if ! [[ "$last_run" =~ ^[0-9]+$ ]]; then
+      last_run=0
+    fi
     local elapsed=$((now - last_run))
     if (( elapsed < MIN_INTERVAL )); then
       log "${YELLOW}[$name]${NC} Rate limited (${elapsed}s < ${MIN_INTERVAL}s)"
