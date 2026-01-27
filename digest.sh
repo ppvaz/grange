@@ -13,8 +13,15 @@ LOCK_DIR="$WORK_DIR/.locks"
 MARKERS_FILE="$LOCK_DIR/digest_markers"
 OUTPUT_FILE="$WORK_DIR/HUMAN_DIGEST.md"
 
+# Load environment variables from .env if present
+if [[ -f "$WORK_DIR/.env" ]]; then
+  set -a
+  source "$WORK_DIR/.env"
+  set +a
+fi
+
 # Z.ai config (same as evolve.sh iterative agents)
-ZAI_API_KEY="${ZAI_API_KEY:-REDACTED_API_KEY}"
+ZAI_API_KEY="${ZAI_API_KEY:?Error: ZAI_API_KEY not set. Copy .env.example to .env and add your key.}"
 ZAI_BASE_URL="https://api.z.ai/api/anthropic"
 
 # Observation files to digest

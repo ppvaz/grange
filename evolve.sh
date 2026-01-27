@@ -3,7 +3,7 @@
 # Agents react to file changes instead of polling on timers
 #
 # Environment variables:
-#   ZAI_API_KEY      - Z.ai API key for GLM-4.7 (default: from opencode config)
+#   ZAI_API_KEY      - Z.ai API key for GLM-4.7 (required, set in .env)
 #   SMART_AGENTS     - Agents using Opus 4.5 (default: "Oracle,Visionary")
 #   CLAUDE_DEBUG     - Enable debug logging (default: true)
 #   AGENT_TIMEOUT    - Default timeout in seconds (default: 600)
@@ -36,8 +36,15 @@ MAX_PENDING_TASKS="${MAX_PENDING_TASKS:-5}"      # Skip Planner if queue is full
 # Checkpointing
 CHECKPOINT_DIR="$LOCK_DIR/checkpoints"
 
+# Load environment variables from .env if present
+if [[ -f "$WORK_DIR/.env" ]]; then
+  set -a
+  source "$WORK_DIR/.env"
+  set +a
+fi
+
 # Dual-API configuration
-ZAI_API_KEY="${ZAI_API_KEY:-REDACTED_API_KEY}"
+ZAI_API_KEY="${ZAI_API_KEY:?Error: ZAI_API_KEY not set. Copy .env.example to .env and add your key.}"
 ZAI_BASE_URL="https://api.z.ai/api/anthropic"
 SMART_AGENTS="${SMART_AGENTS:-Oracle,Visionary}"  # These use native Anthropic/Opus
 CLAUDE_DEBUG="${CLAUDE_DEBUG:-false}"
@@ -188,24 +195,43 @@ all_tasks_complete() {
 }
 
 # Atomic signal counter operations (fixes subshell scope issue)
+# Uses mkdir-based locking for macOS compatibility (flock not available)
 get_signal_count() {
   cat "$SIGNAL_FILE" 2>/dev/null || echo "0"
 }
 
+_atomic_lock() {
+  local lockdir="$1"
+  local max_wait=10
+  local waited=0
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    sleep 0.1
+    waited=$((waited + 1))
+    if (( waited > max_wait * 10 )); then
+      # Stale lock, force remove
+      rm -rf "$lockdir"
+    fi
+  done
+}
+
+_atomic_unlock() {
+  rmdir "$1" 2>/dev/null || true
+}
+
 add_signal_count() {
   local amount=${1:-1}
-  (
-    flock -x 201
-    local current=$(cat "$SIGNAL_FILE" 2>/dev/null || echo "0")
-    echo $((current + amount)) > "$SIGNAL_FILE"
-  ) 201>"$SIGNAL_FILE.lock"
+  local lockdir="$SIGNAL_FILE.lock.d"
+  _atomic_lock "$lockdir"
+  local current=$(cat "$SIGNAL_FILE" 2>/dev/null || echo "0")
+  echo $((current + amount)) > "$SIGNAL_FILE"
+  _atomic_unlock "$lockdir"
 }
 
 reset_signal_count() {
-  (
-    flock -x 201
-    echo "0" > "$SIGNAL_FILE"
-  ) 201>"$SIGNAL_FILE.lock"
+  local lockdir="$SIGNAL_FILE.lock.d"
+  _atomic_lock "$lockdir"
+  echo "0" > "$SIGNAL_FILE"
+  _atomic_unlock "$lockdir"
 }
 
 # Timeout counter operations (tracks consecutive agent timeouts)
@@ -215,40 +241,35 @@ get_timeout_count() {
 
 add_timeout_count() {
   local amount=${1:-1}
-  (
-    flock -x 201
-    local current=$(cat "$TIMEOUT_COUNT_FILE" 2>/dev/null || echo "0")
-    echo $((current + amount)) > "$TIMEOUT_COUNT_FILE"
-  ) 201>"$TIMEOUT_COUNT_FILE.lock"
+  local lockdir="$TIMEOUT_COUNT_FILE.lock.d"
+  _atomic_lock "$lockdir"
+  local current=$(cat "$TIMEOUT_COUNT_FILE" 2>/dev/null || echo "0")
+  echo $((current + amount)) > "$TIMEOUT_COUNT_FILE"
+  _atomic_unlock "$lockdir"
 }
 
 reset_timeout_count() {
-  (
-    flock -x 201
-    echo "0" > "$TIMEOUT_COUNT_FILE"
-  ) 201>"$TIMEOUT_COUNT_FILE.lock"
+  local lockdir="$TIMEOUT_COUNT_FILE.lock.d"
+  _atomic_lock "$lockdir"
+  echo "0" > "$TIMEOUT_COUNT_FILE"
+  _atomic_unlock "$lockdir"
 }
 
 # Global concurrency control - limit total running agents
 acquire_agent_slot() {
   local max_wait=300  # Wait up to 5 minutes for a slot
   local waited=0
+  local lockdir="$AGENT_COUNT_FILE.lock.d"
 
   while (( waited < max_wait )); do
-    local acquired=false
-    (
-      flock -x 201
-      local count=$(cat "$AGENT_COUNT_FILE" 2>/dev/null || echo 0)
-      if (( count < MAX_AGENTS )); then
-        echo $((count + 1)) > "$AGENT_COUNT_FILE"
-        exit 0  # Got slot
-      fi
-      exit 1  # No slot available
-    ) 201>"$AGENT_COUNT_FILE.lock"
-
-    if [[ $? -eq 0 ]]; then
-      return 0  # Successfully acquired slot
+    _atomic_lock "$lockdir"
+    local count=$(cat "$AGENT_COUNT_FILE" 2>/dev/null || echo 0)
+    if (( count < MAX_AGENTS )); then
+      echo $((count + 1)) > "$AGENT_COUNT_FILE"
+      _atomic_unlock "$lockdir"
+      return 0  # Got slot
     fi
+    _atomic_unlock "$lockdir"
 
     sleep 5
     waited=$((waited + 5))
@@ -258,13 +279,13 @@ acquire_agent_slot() {
 }
 
 release_agent_slot() {
-  (
-    flock -x 201
-    local count=$(cat "$AGENT_COUNT_FILE" 2>/dev/null || echo 1)
-    if (( count > 0 )); then
-      echo $((count - 1)) > "$AGENT_COUNT_FILE"
-    fi
-  ) 201>"$AGENT_COUNT_FILE.lock"
+  local lockdir="$AGENT_COUNT_FILE.lock.d"
+  _atomic_lock "$lockdir"
+  local count=$(cat "$AGENT_COUNT_FILE" 2>/dev/null || echo 1)
+  if (( count > 0 )); then
+    echo $((count - 1)) > "$AGENT_COUNT_FILE"
+  fi
+  _atomic_unlock "$lockdir"
 }
 
 # Rate-limited agent runner
@@ -292,8 +313,8 @@ run_agent() {
   # Write PID to marker for stale detection
   echo $$ > "$run_marker/pid"
 
-  # Cleanup run marker on exit
-  trap "rm -rf '$run_marker' 2>/dev/null || true; release_agent_slot" RETURN
+  # Cleanup run marker on exit (slot release added later after acquisition)
+  trap "rm -rf '$run_marker' 2>/dev/null || true" RETURN
 
   # Check rate limit
   if [[ -f "$time_file" ]]; then
@@ -317,13 +338,16 @@ run_agent() {
     return 1
   fi
 
-  # Acquire lock (non-blocking)
-  exec 200>"$lock_file"
-  if ! flock -n 200; then
+  # Acquire lock (non-blocking) using mkdir for macOS compatibility
+  local lock_dir="${lock_file}.d"
+  if ! mkdir "$lock_dir" 2>/dev/null; then
     log "${YELLOW}[$name]${NC} Already running, skipping"
     release_agent_slot
     return 2  # Distinct code for "skipped"
   fi
+
+  # Cleanup lock dir on exit (update trap)
+  trap "rm -rf '$run_marker' '$lock_dir' 2>/dev/null || true; release_agent_slot" RETURN
 
   date +%s > "$time_file"
 
@@ -377,7 +401,7 @@ run_agent() {
     log "${RED}[$name]${NC} Failed with exit code $cmd_result"
   fi
 
-  flock -u 200
+  # Lock cleanup handled by trap
 }
 
 # ============================================
@@ -557,89 +581,126 @@ If everything looks healthy and coherent, or you've already noted the same patte
 # EVENT WATCHERS
 # ============================================
 
+# Platform detection for file watching
+USE_FSWATCH=false
+if [[ "$(uname)" == "Darwin" ]]; then
+  USE_FSWATCH=true
+fi
+
 # Watch for file changes and trigger appropriate agents
 watch_plan() {
   log "${GREEN}[Watcher]${NC} Monitoring PLAN.md for changes..."
-  local last_trigger=0
+  local last_trigger_file="$LOCK_DIR/watcher_plan.last"
+  echo "0" > "$last_trigger_file"
 
-  while read -r dir event file; do
+  _handle_plan_change() {
     if check_done; then
       log "${GREEN}[Watcher]${NC} DONE.md exists, stopping plan watcher"
-      break
+      return 1
     fi
 
     # Debounce: skip if triggered too recently
     local now=$(date +%s)
+    local last_trigger=$(cat "$last_trigger_file" 2>/dev/null || echo 0)
     local elapsed=$((now - last_trigger))
     if (( elapsed < DEBOUNCE_INTERVAL )); then
       log "${YELLOW}[Watcher]${NC} PLAN.md change debounced (${elapsed}s < ${DEBOUNCE_INTERVAL}s)"
-      continue
+      return 0
     fi
-    last_trigger=$now
+    echo "$now" > "$last_trigger_file"
 
     log "${BLUE}[Watcher]${NC} PLAN.md changed, triggering agents..."
     executor &
     sleep 2
     critic &
-  done < <(inotifywait -m -e close_write,moved_to "$WORK_DIR/PLAN.md" 2>/dev/null)
+  }
+
+  if [[ "$USE_FSWATCH" == true ]]; then
+    fswatch -o "$WORK_DIR/PLAN.md" 2>/dev/null | while read -r _; do
+      _handle_plan_change || break
+    done
+  else
+    while read -r dir event file; do
+      _handle_plan_change || break
+    done < <(inotifywait -m -e close_write,moved_to "$WORK_DIR/PLAN.md" 2>/dev/null)
+  fi
 }
 
 watch_vision() {
   log "${GREEN}[Watcher]${NC} Monitoring VISION.md for changes..."
-  local last_trigger=0
+  local last_trigger_file="$LOCK_DIR/watcher_vision.last"
+  echo "0" > "$last_trigger_file"
 
-  while read -r dir event file; do
+  _handle_vision_change() {
     if check_done; then
       log "${GREEN}[Watcher]${NC} DONE.md exists, stopping vision watcher"
-      break
+      return 1
     fi
 
     # Debounce: skip if triggered too recently
     local now=$(date +%s)
+    local last_trigger=$(cat "$last_trigger_file" 2>/dev/null || echo 0)
     local elapsed=$((now - last_trigger))
     if (( elapsed < DEBOUNCE_INTERVAL )); then
       log "${YELLOW}[Watcher]${NC} VISION.md change debounced (${elapsed}s < ${DEBOUNCE_INTERVAL}s)"
-      continue
+      return 0
     fi
-    last_trigger=$now
+    echo "$now" > "$last_trigger_file"
 
     log "${BLUE}[Watcher]${NC} VISION.md changed, re-evaluating plan..."
     critic &
     sleep 5
     planner &
-  done < <(inotifywait -m -e close_write,moved_to "$WORK_DIR/VISION.md" 2>/dev/null)
+  }
+
+  if [[ "$USE_FSWATCH" == true ]]; then
+    fswatch -o "$WORK_DIR/VISION.md" 2>/dev/null | while read -r _; do
+      _handle_vision_change || break
+    done
+  else
+    while read -r dir event file; do
+      _handle_vision_change || break
+    done < <(inotifywait -m -e close_write,moved_to "$WORK_DIR/VISION.md" 2>/dev/null)
+  fi
 }
 
 # Watch for signs the vision needs review
 watch_signals() {
   log "${GREEN}[Watcher]${NC} Monitoring BLOCKERS.md, CUTS.md, DRIFT.md for patterns..."
-  
-  # Track file sizes to detect growth
-  local last_blockers=$(wc -l < "$WORK_DIR/BLOCKERS.md" 2>/dev/null || echo 0)
-  local last_cuts=$(wc -l < "$WORK_DIR/CUTS.md" 2>/dev/null || echo 0)
-  local last_drift=$(wc -l < "$WORK_DIR/DRIFT.md" 2>/dev/null || echo 0)
-  
-  # Process substitution keeps loop in main shell, preserving variable state
-  while read -r dir event file; do
+
+  # Track file sizes to detect growth (file-based for subshell persistence)
+  local sizes_file="$LOCK_DIR/watcher_signals.sizes"
+  {
+    echo "blockers:$(wc -l < "$WORK_DIR/BLOCKERS.md" 2>/dev/null || echo 0)"
+    echo "cuts:$(wc -l < "$WORK_DIR/CUTS.md" 2>/dev/null || echo 0)"
+    echo "drift:$(wc -l < "$WORK_DIR/DRIFT.md" 2>/dev/null || echo 0)"
+  } > "$sizes_file"
+
+  _handle_signal_change() {
     if check_done; then
       log "${GREEN}[Watcher]${NC} DONE.md exists, stopping signal watcher"
-      break
+      return 1
     fi
-    
+
+    # Read last sizes
+    local last_blockers=$(grep "^blockers:" "$sizes_file" 2>/dev/null | cut -d: -f2 || echo 0)
+    local last_cuts=$(grep "^cuts:" "$sizes_file" 2>/dev/null | cut -d: -f2 || echo 0)
+    local last_drift=$(grep "^drift:" "$sizes_file" 2>/dev/null | cut -d: -f2 || echo 0)
+
     # Count how much the files grew
     local curr_blockers=$(wc -l < "$WORK_DIR/BLOCKERS.md" 2>/dev/null || echo 0)
     local curr_cuts=$(wc -l < "$WORK_DIR/CUTS.md" 2>/dev/null || echo 0)
     local curr_drift=$(wc -l < "$WORK_DIR/DRIFT.md" 2>/dev/null || echo 0)
-    
+
     local growth=$(( (curr_blockers - last_blockers) + (curr_cuts - last_cuts) + (curr_drift - last_drift) ))
-    
+
     if (( growth > 0 )); then
       # Use file-based counter to persist across subshell iterations
       add_signal_count "$growth"
       local signal_count
       signal_count=$(get_signal_count)
       log "${YELLOW}[Watcher]${NC} Signal files grew by $growth lines (total signals: $signal_count)"
-      
+
       # Trigger Visionary after accumulating enough signals
       if (( signal_count >= 3 )); then
         log "${BLUE}[Watcher]${NC} Threshold reached, triggering Visionary..."
@@ -663,29 +724,43 @@ watch_signals() {
         fi
       fi
     fi
-    
-    last_blockers=$curr_blockers
-    last_cuts=$curr_cuts
-    last_drift=$curr_drift
-  done < <(inotifywait -m -e close_write,moved_to "$WORK_DIR/BLOCKERS.md" "$WORK_DIR/CUTS.md" "$WORK_DIR/DRIFT.md" 2>/dev/null)
+
+    # Update sizes file
+    {
+      echo "blockers:$curr_blockers"
+      echo "cuts:$curr_cuts"
+      echo "drift:$curr_drift"
+    } > "$sizes_file"
+  }
+
+  if [[ "$USE_FSWATCH" == true ]]; then
+    fswatch -o "$WORK_DIR/BLOCKERS.md" "$WORK_DIR/CUTS.md" "$WORK_DIR/DRIFT.md" 2>/dev/null | while read -r _; do
+      _handle_signal_change || break
+    done
+  else
+    while read -r dir event file; do
+      _handle_signal_change || break
+    done < <(inotifywait -m -e close_write,moved_to "$WORK_DIR/BLOCKERS.md" "$WORK_DIR/CUTS.md" "$WORK_DIR/DRIFT.md" 2>/dev/null)
+  fi
 }
 
 # Git commit watcher - event-driven via hook signal file
 watch_commits() {
   log "${GREEN}[Watcher]${NC} Monitoring git commits via hook signal..."
-  
+
   # Create signal file if it doesn't exist
   touch "$GIT_SIGNAL"
-  
-  while read -r dir event file; do
+
+  _handle_commit_signal() {
+    local file="$1"
     # Only react to our signal file
-    [[ "$file" == "$(basename "$GIT_SIGNAL")" ]] || continue
-    
+    [[ "$file" == "$(basename "$GIT_SIGNAL")" || "$file" == "$GIT_SIGNAL" ]] || return 0
+
     if check_done; then
       log "${GREEN}[Watcher]${NC} DONE.md exists, stopping commit watcher"
-      break
+      return 1
     fi
-    
+
     local current_commit
     current_commit=$(git rev-parse HEAD 2>/dev/null || echo "none")
     log "${BLUE}[Watcher]${NC} New commit detected: ${current_commit:0:8}"
@@ -703,7 +778,17 @@ watch_commits() {
       sleep 5
       oracle &
     fi
-  done < <(inotifywait -m -e close_write,moved_to,create "$(dirname "$GIT_SIGNAL")" 2>/dev/null)
+  }
+
+  if [[ "$USE_FSWATCH" == true ]]; then
+    fswatch -o "$GIT_SIGNAL" 2>/dev/null | while read -r _; do
+      _handle_commit_signal "$GIT_SIGNAL" || break
+    done
+  else
+    while read -r dir event file; do
+      _handle_commit_signal "$file" || break
+    done < <(inotifywait -m -e close_write,moved_to,create "$(dirname "$GIT_SIGNAL")" 2>/dev/null)
+  fi
 }
 
 # Periodic heartbeat for agents that need regular checks
@@ -750,10 +835,17 @@ main() {
   log "${GREEN}  Evolve.sh - Event-Driven Agent System${NC}"
   log "${GREEN}========================================${NC}"
   
-  # Check dependencies
-  if ! command -v inotifywait &> /dev/null; then
-    log "${RED}[Error]${NC} inotifywait not found. Install with: apt install inotify-tools"
-    exit 1
+  # Check dependencies (platform-specific file watcher)
+  if [[ "$USE_FSWATCH" == true ]]; then
+    if ! command -v fswatch &> /dev/null; then
+      log "${RED}[Error]${NC} fswatch not found. Install with: brew install fswatch"
+      exit 1
+    fi
+  else
+    if ! command -v inotifywait &> /dev/null; then
+      log "${RED}[Error]${NC} inotifywait not found. Install with: apt install inotify-tools"
+      exit 1
+    fi
   fi
   
   if ! command -v claude &> /dev/null; then

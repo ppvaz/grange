@@ -1,0 +1,10 @@
+# Environment files with secrets
+.env
+.env.local
+
+# Lock files and runtime state
+.locks/
+
+# Log files
+LOG.md
+*.log
