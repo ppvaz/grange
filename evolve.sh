@@ -143,8 +143,20 @@ init_workspace() {
       stale_count=$((stale_count + 1))
     fi
   done
+
+  # Clean up stale lock directories (*.lock.d) from previous crashes
+  for lockdir in "$LOCK_DIR"/*.lock.d; do
+    [[ -d "$lockdir" ]] || continue
+    # Lock dirs are stale if no corresponding running_* marker exists
+    local agent_name=$(basename "$lockdir" .lock.d)
+    if [[ ! -d "$LOCK_DIR/running_${agent_name}" ]]; then
+      rm -rf "$lockdir"
+      stale_count=$((stale_count + 1))
+    fi
+  done
+
   if (( stale_count > 0 )); then
-    log "${YELLOW}[Setup]${NC} Cleaned $stale_count stale run marker(s)"
+    log "${YELLOW}[Setup]${NC} Cleaned $stale_count stale run marker(s)/lock(s)"
     # Recalculate agent count based on remaining valid markers
     local active_count
     active_count=$(find "$LOCK_DIR" -maxdepth 1 -type d -name "running_*" 2>/dev/null | wc -l)
