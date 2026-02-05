@@ -17,3 +17,6 @@ specs/*
 !specs/patterns/
 specs/patterns/*
 !specs/patterns/entity-crud.md
+
+# Dashboard build artifacts
+dashboard/grange-dashboard
