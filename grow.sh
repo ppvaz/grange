@@ -1,5 +1,5 @@
 #!/bin/bash
-# evolve.sh - Event-driven multi-agent system
+# grow.sh - Event-driven multi-agent system
 # Agents react to file changes instead of polling on timers
 #
 # Environment variables:
@@ -114,6 +114,7 @@ run_with_timeout() {
 init_workspace() {
   mkdir -p "$LOCK_DIR"
   mkdir -p "$CHECKPOINT_DIR"
+  mkdir -p "$WORK_DIR/specs"
   touch "$WORK_DIR/VISION.md" "$WORK_DIR/PLAN.md" "$LOG_FILE"
   [[ -f "$WORK_DIR/BLOCKERS.md" ]] || touch "$WORK_DIR/BLOCKERS.md"
   [[ -f "$WORK_DIR/CUTS.md" ]] || touch "$WORK_DIR/CUTS.md"
@@ -174,7 +175,7 @@ setup_git_hook() {
   
   local hooks_dir="$git_dir/hooks"
   local hook_file="$hooks_dir/post-commit"
-  local marker="# EVOLVE_HOOK"
+  local marker="# GROW_HOOK"
   
   mkdir -p "$hooks_dir"
   
@@ -187,7 +188,7 @@ setup_git_hook() {
   cat >> "$hook_file" << EOF
 
 $marker
-# Signal evolve.sh about new commits
+# Signal grow.sh about new commits
 touch "${GIT_SIGNAL}" 2>/dev/null || true
 EOF
   
@@ -469,7 +470,21 @@ planner() {
     return 0
   fi
 
-  run_agent "Planner" "You are the Planner agent. Review VISION.md and PLAN.md. Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md."
+  local spec_context=""
+  if [[ -d "$WORK_DIR/specs" ]] && [[ -n "$(ls -A "$WORK_DIR/specs/" 2>/dev/null)" ]]; then
+    spec_context="
+
+SPEC LIBRARY: There are specs available in specs/. Before adding a task:
+1. Run: ls specs/ to see available collections
+2. Run: ls specs/patterns/ for reusable cross-domain patterns
+3. Browse project-specific specs if relevant (specs/tim/, specs/memoji/, etc.)
+4. Read any spec whose name seems relevant to the vision
+5. If a matching spec exists, reference it: '- [ ] Implement specs/[path].md: [brief description]'
+6. If no spec matches, add the task without a spec reference
+Specs contain acceptance criteria — use them to make tasks more precise."
+  fi
+
+  run_agent "Planner" "You are the Planner agent. Review VISION.md and PLAN.md. Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md.${spec_context}"
 }
 
 critic() {
@@ -844,7 +859,7 @@ main() {
   init_workspace
   
   log "${GREEN}========================================${NC}"
-  log "${GREEN}  Evolve.sh - Event-Driven Agent System${NC}"
+  log "${GREEN}  Grow.sh - Event-Driven Agent System${NC}"
   log "${GREEN}========================================${NC}"
   
   # Check dependencies (platform-specific file watcher)

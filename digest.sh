@@ -4,7 +4,7 @@
 # into HUMAN_DIGEST.md for async human review.
 #
 # Usage: ./digest.sh          (manual run)
-#        Called automatically by evolve.sh on signal threshold or daily schedule
+#        Called automatically by grow.sh on signal threshold or daily schedule
 
 set -euo pipefail
 
@@ -20,7 +20,7 @@ if [[ -f "$WORK_DIR/.env" ]]; then
   set +a
 fi
 
-# Z.ai config (same as evolve.sh iterative agents)
+# Z.ai config (same as grow.sh iterative agents)
 ZAI_API_KEY="${ZAI_API_KEY:?Error: ZAI_API_KEY not set. Copy .env.example to .env and add your key.}"
 ZAI_BASE_URL="https://api.z.ai/api/anthropic"
 

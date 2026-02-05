@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grange Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="header">
+    <div class="header-left">
+      <span class="logo">🌾 GRANGE</span>
+      <span class="work-dir" id="workDir"></span>
+    </div>
+    <div class="header-right">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-label" id="statusLabel">Connecting</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="agents" id="agents"></section>
+
+    <div class="grid-2">
+      <section class="card" id="planCard">
+        <h2>Plan</h2>
+        <div class="card-body" id="planBody"></div>
+      </section>
+
+      <section class="card" id="signalsCard">
+        <h2>Signals</h2>
+        <div class="card-body" id="signalsBody"></div>
+      </section>
+    </div>
+
+    <div class="grid-2">
+      <section class="card" id="pipelineCard">
+        <h2>Pipeline</h2>
+        <div class="card-body" id="pipelineBody"></div>
+      </section>
+
+      <section class="card" id="specsCard">
+        <h2>Spec Library</h2>
+        <div class="card-body" id="specsBody"></div>
+      </section>
+    </div>
+
+    <section class="card" id="activityCard">
+      <h2>Activity</h2>
+      <div class="card-body log-body" id="activityBody"></div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle"></h3>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-content" id="modalContent"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

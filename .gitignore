@@ -4,7 +4,16 @@
 
 # Lock files and runtime state
 .locks/
+.ike-state
 
 # Log files
 LOG.md
 *.log
+
+# Spec library (sensitive client data)
+# Only README and one generic example are committed
+specs/*
+!specs/README.md
+!specs/patterns/
+specs/patterns/*
+!specs/patterns/entity-crud.md

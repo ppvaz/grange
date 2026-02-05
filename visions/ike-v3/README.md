@@ -1,10 +1,13 @@
 # IKE v3: Institutional Knowledge Extractor
 
-A six-stage pipeline for extracting implicit codebase knowledge into structured
+A six-stage pipeline for extracting implicit project knowledge into structured
 catalogues, with human checkpoints between each autonomous agent run.
 
-Stages 0-1 produce a technology-agnostic knowledge base (entities, rules, flows,
-integrations). Stage 2 optionally rebuilds from that catalogue.
+The input is any existing project — a codebase, a business model captured in a landing page, an institutional website, documentation. The output is technology-agnostic knowledge: entities, business rules, user flows, integration contracts, with confidence scores.
+
+Stages 0-1 produce the knowledge base. Stage 2 optionally rebuilds from it.
+
+> **Automated mode:** `reap.sh start /path/to/project` runs the full pipeline, managing stage transitions and state automatically. This document describes what each stage does and how to intervene.
 
 ## Use Cases
 
@@ -15,15 +18,15 @@ The knowledge catalogue is the core artifact. What you do with it is up to you:
 - **Architecture review** - understand system structure before changes
 - **Risk assessment** - identify fragile areas and tribal knowledge gaps
 - **Knowledge preservation** - capture expertise before team transitions
-- **Codebase modernization** - rebuild with modern stack using extracted specs
+- **Project modernization** - rebuild with modern stack using extracted specs
 
 ---
 
 ## Philosophy
 
-**evolve.sh runs autonomously. Humans intervene between runs.**
+**grow.sh runs autonomously. Humans intervene between runs.**
 
-Each stage is a complete evolve.sh execution that produces artifacts and stops.
+Each stage is a complete grow.sh execution that produces artifacts and stops.
 You review, add context, make decisions, then start the next stage.
 No mid-flight interrupts. Clean handoffs.
 
@@ -92,13 +95,14 @@ STAGE 2a: BUILD                     STAGE 2b: VERIFY
 
 ## Full Run Walkthrough
 
+> **Prefer `reap.sh`**: The walkthrough below shows the manual stage-by-stage process for understanding or debugging. For normal use, run `reap.sh start /path/to/project` — it handles vision file management, state tracking, and stage transitions automatically.
+
 ### Stage 0a: Lens Analysis
 ```bash
-cd /path/to/legacy-project
-cp /path/to/evolver/visions/ike-v3/VISION-stage0a-lenses.md VISION.md
-cp /path/to/evolver/evolve.sh .
+cd /path/to/target-project
+cp /path/to/grange/visions/ike-v3/VISION-stage0a-lenses.md VISION.md
 # Edit [TARGET_CODEBASE_PATH] in VISION.md
-./evolve.sh start
+/path/to/grange/grow.sh start
 # Wait for DONE.md
 ```
 
@@ -137,7 +141,7 @@ Correct interpretation: [your answer]
 ```bash
 rm DONE.md
 cp VISION-stage0b-synthesis.md VISION.md
-./evolve.sh start
+./grow.sh start
 ```
 
 **You get:**
@@ -163,7 +167,7 @@ VISION-stage1-extraction.md   # Customized for this codebase
 ```bash
 rm DONE.md
 mv VISION-stage1-extraction.md VISION.md  # Use generated spec
-./evolve.sh start
+./grow.sh start
 ```
 
 **You get:**
@@ -189,7 +193,7 @@ knowledge/
 ```bash
 rm DONE.md
 cp VISION-stage1b-prompts.md VISION.md
-./evolve.sh start
+./grow.sh start
 ```
 
 **You get:**
@@ -216,10 +220,10 @@ knowledge/
 ```bash
 # New project directory
 mkdir ../new-project && cd ../new-project
-cp -r ../legacy-project/knowledge .
+cp -r ../original-project/knowledge .
 cp VISION-stage2a-build.md VISION.md
 # Edit [TARGET STACK]
-./evolve.sh start
+./grow.sh start
 ```
 
 **You get:**
@@ -246,7 +250,7 @@ docs/
 ```bash
 rm DONE.md
 cp VISION-stage2b-verify.md VISION.md
-./evolve.sh start
+./grow.sh start
 ```
 
 **You get:**
@@ -338,28 +342,39 @@ Better prompts for next rebuild
 
 ## Quick Reference
 
+### Automated (recommended)
+
+```bash
+./reap.sh start /path/to/project     # Full pipeline with human checkpoints
+./reap.sh resume /path/to/project    # Continue after pausing
+./reap.sh status /path/to/project    # Check progress
+./reap.sh reset 2 /path/to/project   # Jump back to stage 2 (1a)
+```
+
+### Manual (for debugging or custom workflows)
+
 ```bash
 # Stage 0a
-cp VISION-stage0a-lenses.md VISION.md && ./evolve.sh start
+cp VISION-stage0a-lenses.md VISION.md && ./grow.sh start
 # → Review lens files → Create recon/HUMAN-CONTEXT.md
 
 # Stage 0b
-rm DONE.md && cp VISION-stage0b-synthesis.md VISION.md && ./evolve.sh start
+rm DONE.md && cp VISION-stage0b-synthesis.md VISION.md && ./grow.sh start
 # → Review synthesis → Proceed or iterate
 
 # Stage 1a
-rm DONE.md && mv VISION-stage1-extraction.md VISION.md && ./evolve.sh start
+rm DONE.md && mv VISION-stage1-extraction.md VISION.md && ./grow.sh start
 # → Review confidence → Create knowledge/HUMAN-CONTEXT.md if needed
 
 # Stage 1b
-rm DONE.md && cp VISION-stage1b-prompts.md VISION.md && ./evolve.sh start
+rm DONE.md && cp VISION-stage1b-prompts.md VISION.md && ./grow.sh start
 # → Review risks → Proceed or iterate
 
 # Stage 2a (new directory)
-cp VISION-stage2a-build.md VISION.md && ./evolve.sh start
+cp VISION-stage2a-build.md VISION.md && ./grow.sh start
 # → Review progress → Create docs/HUMAN-DECISIONS.md if blocked
 
 # Stage 2b
-rm DONE.md && cp VISION-stage2b-verify.md VISION.md && ./evolve.sh start
+rm DONE.md && cp VISION-stage2b-verify.md VISION.md && ./grow.sh start
 # → Review verdict → Ship or iterate
 ```
