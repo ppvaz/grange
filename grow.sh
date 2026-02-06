@@ -37,9 +37,15 @@ MAX_PENDING_TASKS="${MAX_PENDING_TASKS:-5}"      # Skip Planner if queue is full
 CHECKPOINT_DIR="$LOCK_DIR/checkpoints"
 
 # Load environment variables from .env if present
+# Check work dir first, then fall back to the script's own directory (for symlinked setups)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 if [[ -f "$WORK_DIR/.env" ]]; then
   set -a
   source "$WORK_DIR/.env"
+  set +a
+elif [[ -f "$SCRIPT_DIR/.env" ]]; then
+  set -a
+  source "$SCRIPT_DIR/.env"
   set +a
 fi
 
