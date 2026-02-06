@@ -384,8 +384,7 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 	// Check for agent log request
 	var path string
 	if strings.HasPrefix(key, "agent-") {
-		agentName := strings.TrimPrefix(key, "agent-")
-		path = filepath.Join(workDir, ".locks", agentName+".log")
+		path = filepath.Join(workDir, ".locks", filename+".log")
 	} else {
 		path = filepath.Join(workDir, filename)
 	}
@@ -407,7 +406,7 @@ func init() {
 	// Add agent log keys to readable files
 	for _, name := range agentNames {
 		key := "agent-" + strings.ToLower(name)
-		readableFiles[key] = "" // path resolved dynamically
+		readableFiles[key] = name // store original-cased name for path resolution
 	}
 }
 

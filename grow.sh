@@ -4,7 +4,7 @@
 #
 # Environment variables:
 #   ZAI_API_KEY      - Z.ai API key for GLM-4.7 (required, set in .env)
-#   SMART_AGENTS     - Agents using Opus 4.5 (default: "Oracle,Visionary")
+#   SMART_AGENTS     - Agents using Opus 4.6 (default: "Oracle,Visionary")
 #   CLAUDE_DEBUG     - Enable debug logging (default: true)
 #   AGENT_TIMEOUT    - Default timeout in seconds (default: 600)
 #   ORACLE_TIMEOUT   - Timeout for Oracle (default: 900)
@@ -62,9 +62,15 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log() {
-  echo -e "$(date +%H:%M:%S) $1" | tee -a "$LOG_FILE"
-}
+if [[ -t 1 ]]; then
+  log() { echo -e "$(date +%H:%M:%S) $1" | tee -a "$LOG_FILE"; }
+  # tee to stdout + log files
+  _agent_tee() { tee -a "$@"; }
+else
+  log() { echo -e "$(date +%H:%M:%S) $1" >> "$LOG_FILE"; }
+  # log files only, no stdout
+  _agent_tee() { tee -a "$@" > /dev/null; }
+fi
 
 # Timeout wrapper with graceful shutdown (SIGTERM first, then SIGKILL)
 # Gives process 30 seconds to clean up after SIGTERM before SIGKILL
@@ -385,13 +391,13 @@ run_agent() {
   echo "=== Run started at $(date) ===" >> "$agent_log"
 
   if [[ "$is_smart_agent" == true ]]; then
-    # Smart agents: Opus 4.5 via native Anthropic (uses Claude subscription)
-    log "${BLUE}[$name]${NC} Running with Claude Opus 4.5 (timeout: ${timeout}s)..."
+    # Smart agents: Opus 4.6 via native Anthropic (uses Claude subscription)
+    log "${BLUE}[$name]${NC} Running with Claude Opus 4.6 (timeout: ${timeout}s)..."
     (
       unset ANTHROPIC_BASE_URL  # Use default Anthropic
       [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
       run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model opus
-    ) 2>&1 | tee -a "$LOG_FILE" "$agent_log" || cmd_result=$?
+    ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   else
     # Iterative agents: GLM-4.7 via Z.ai
     log "${BLUE}[$name]${NC} Running with GLM-4.7 via Z.ai (timeout: ${timeout}s)..."
@@ -400,7 +406,7 @@ run_agent() {
       export ANTHROPIC_API_KEY="$ZAI_API_KEY"
       [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
       run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model sonnet
-    ) 2>&1 | tee -a "$LOG_FILE" "$agent_log" || cmd_result=$?
+    ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   fi
 
   if [[ $cmd_result -eq 0 ]]; then
