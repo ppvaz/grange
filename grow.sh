@@ -396,7 +396,7 @@ run_agent() {
     (
       unset ANTHROPIC_BASE_URL  # Use default Anthropic
       [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
-      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model opus
+      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model opus < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   else
     # Iterative agents: GLM-4.7 via Z.ai
@@ -405,7 +405,7 @@ run_agent() {
       export ANTHROPIC_BASE_URL="$ZAI_BASE_URL"
       export ANTHROPIC_API_KEY="$ZAI_API_KEY"
       [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
-      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model sonnet
+      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model sonnet < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   fi
 
