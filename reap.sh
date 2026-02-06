@@ -83,7 +83,7 @@ usage() {
   echo "with human checkpoints between each grow.sh run."
   echo ""
   echo "Commands:"
-  echo "  start  /path/to/project  Begin pipeline from Stage 0a"
+  echo "  start  /path/to/target    Begin pipeline from Stage 0a (runs in cwd)"
   echo "  resume [work-dir]        Resume from last completed stage (default: cwd)"
   echo "  status [work-dir]        Show pipeline progress"
   echo "  reset  <stage> [work-dir] Jump to stage N (0-$((NUM_STAGES - 1)))"
@@ -532,7 +532,7 @@ main_start() {
   fi
   target_path=$(cd "$target_path" && pwd)
 
-  WORK_DIR="$target_path"
+  WORK_DIR="$(pwd)"
   init_state_file
   resolve_grange
 

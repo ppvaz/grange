@@ -231,6 +231,65 @@ main {
   50%      { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
 }
 
+/* --- Vision --- */
+
+.vision-card {
+  border-color: var(--border-hover);
+}
+
+.vision-body {
+  font-size: 0.85rem;
+  line-height: 1.7;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.vision-body h1, .vision-body h2, .vision-body h3 {
+  color: var(--text);
+  margin: 12px 0 6px;
+  font-weight: 600;
+}
+
+.vision-body h1 { font-size: 1.1rem; }
+.vision-body h2 { font-size: 0.95rem; }
+.vision-body h3 { font-size: 0.85rem; }
+
+.vision-body p {
+  margin: 4px 0;
+  color: var(--text-muted);
+}
+
+.vision-body li {
+  margin: 3px 0;
+  color: var(--text-muted);
+}
+
+.vision-body strong {
+  color: var(--text);
+}
+
+.vision-body code {
+  font-family: var(--font-mono);
+  background: var(--surface-alt);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.vision-body pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.vision-body pre code {
+  background: none;
+  padding: 0;
+}
+
 /* --- Plan --- */
 
 .plan-summary {

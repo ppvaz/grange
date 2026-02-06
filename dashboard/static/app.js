@@ -15,6 +15,7 @@
   const statusDot  = $('statusDot');
   const statusLabel= $('statusLabel');
   const agentsEl   = $('agents');
+  const visionBody = $('visionBody');
   const planBody   = $('planBody');
   const signalsBody= $('signalsBody');
   const pipelineBody=$('pipelineBody');
@@ -214,9 +215,23 @@
     planBody.innerHTML = html;
   }
 
+  function renderVision(files) {
+    const f = files['vision'];
+    if (!f || !f.exists) {
+      visionBody.innerHTML = '<div class="empty-state">No VISION.md found</div>';
+      return;
+    }
+    // Fetch and render inline
+    fetch('/api/file/vision')
+      .then(function (resp) { return resp.ok ? resp.text() : Promise.reject(); })
+      .then(function (text) { visionBody.innerHTML = renderMarkdown(text); })
+      .catch(function () {
+        visionBody.innerHTML = '<div class="empty-state">Could not load VISION.md</div>';
+      });
+  }
+
   function renderSignals(files) {
     const signals = [
-      { key: 'vision',   label: 'VISION' },
       { key: 'blockers', label: 'BLOCKERS' },
       { key: 'drift',    label: 'DRIFT' },
       { key: 'cuts',     label: 'CUTS' },
@@ -362,6 +377,7 @@
 
     // Sections
     renderAgents(state.agents);
+    renderVision(state.files);
     renderPlan(state.plan);
     renderSignals(state.files);
     renderPipeline(state.pipeline);
