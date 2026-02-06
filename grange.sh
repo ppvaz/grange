@@ -103,6 +103,12 @@ GITIGNORE
 VISION
   echo "  created VISION.md"
 
+  # Initialize git repo
+  git -C "$target" init -q
+  git -C "$target" add -A
+  git -C "$target" commit -q -m "Initial scaffold (grange init)"
+  echo "  initialized git repo"
+
   echo
   echo "Done. Next steps:"
   echo "  cd $target"
