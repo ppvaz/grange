@@ -22,6 +22,10 @@ knowledge/
 └── EXTRACTION-COMPLETE.md
 ```
 
+## Workspace Rules
+- ALL output files go in your working directory (cwd).
+- Do NOT plan beyond this stage. Only plan tasks listed below.
+
 ---
 
 ## Tasks

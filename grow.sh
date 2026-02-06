@@ -497,6 +497,11 @@ Specs contain acceptance criteria — use them to make tasks more precise."
   fi
 
   run_agent "Planner" "You are the Planner agent. Review VISION.md and PLAN.md. Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md.${spec_context}"
+
+  # Kick off Executor immediately if Planner added tasks (don't wait for watcher debounce)
+  if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+    executor &
+  fi
 }
 
 critic() {
@@ -914,15 +919,23 @@ main() {
   watch_signals &
   heartbeat 600 &
   
-  # Initial kick-off if PLAN.md has tasks
-  if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null; then
+  # Initial kick-off
+  local task_count
+  task_count=$(grep -c '\- \[.\]' "$WORK_DIR/PLAN.md" 2>/dev/null) || task_count=0
+
+  if (( task_count > 0 )); then
     log "${BLUE}[Main]${NC} Found pending tasks, starting executor..."
     sleep 2
     executor &
   else
-    log "${BLUE}[Main]${NC} No pending tasks, starting planner..."
+    # Empty plan: populate all tasks from vision in one shot
+    log "${BLUE}[Main]${NC} Empty plan, populating initial tasks from vision..."
     sleep 2
-    planner &
+    run_agent "Planner" "You are the Planner agent. PLAN.md is empty. Review VISION.md and populate PLAN.md with ALL tasks needed to fulfill the vision. Break the vision into concrete, atomic, actionable tasks. Format each as '- [ ] <task description>'. Order them logically."
+    # Chain into executor now that plan is populated
+    if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+      executor &
+    fi
   fi
   
   log "${GREEN}[Main]${NC} All watchers running. Touch DONE.md to stop."

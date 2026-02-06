@@ -7,6 +7,13 @@ Stop after all lenses complete. Human will review before synthesis.
 ## Target
 `[TARGET_CODEBASE_PATH]`
 
+## Workspace Rules
+- Your working directory (cwd) is where ALL output files go.
+- The target codebase above is **READ-ONLY**. NEVER create, modify, or delete files there.
+- Read from the target to analyze it, write outputs to your working directory.
+- Do NOT plan beyond this stage. Only plan tasks listed below.
+- Do NOT plan improvements, fixes, or features for the target project.
+
 ---
 
 ## Tasks

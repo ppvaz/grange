@@ -16,6 +16,11 @@ knowledge/
 └── HUMAN-CONTEXT.md            # Human-provided (if exists)
 ```
 
+## Workspace Rules
+- ALL output files go in your working directory (cwd).
+- Do NOT plan beyond this stage. Only plan tasks listed below.
+- Do NOT plan improvements, fixes, or features for the target project.
+
 ---
 
 ## Tasks

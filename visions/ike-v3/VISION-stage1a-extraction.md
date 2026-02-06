@@ -17,6 +17,11 @@ VISION-stage1-extraction.md     # Project-specific extraction spec (from Stage 0
 Read VISION-stage1-extraction.md first — it contains project-specific entities,
 rules, flows, and integrations to extract.
 
+## Workspace Rules
+- ALL output files go in your working directory (cwd).
+- Do NOT plan beyond this stage. Only plan tasks listed below.
+- Do NOT plan improvements, fixes, or features for the target project.
+
 ---
 
 ## Tasks
