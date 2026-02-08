@@ -7,6 +7,7 @@
 # Usage:
 #   grange init <directory>   Create a new project scaffold
 #   grange adopt [directory]  Bring grange into an existing project
+#   grange eject [directory]  Remove grange from a completed project
 #   grange dashboard [directory]  Launch the dashboard for a project
 #   grange help               Show this help
 
@@ -22,6 +23,7 @@ Usage: grange <command> [options]
 Commands:
   init <dir>        Scaffold a new project directory with symlinks to grange
   adopt [dir]       Bring grange into an existing project (default: current dir)
+  eject [dir]       Remove grange from a completed project (default: current dir)
   dashboard [dir]   Launch the dashboard for a project (default: current dir)
   help              Show this help
 
@@ -30,6 +32,7 @@ Examples:
   grange init ~/Projects/client-rebuild
   cd ~/Projects/existing-app && grange adopt
   grange adopt ~/Projects/existing-app
+  grange eject ~/Projects/completed-app
   grange dashboard
 EOF
 }
@@ -123,6 +126,15 @@ cmd_init() {
 
   # Create project-specific .gitignore
   cat > "$target/.gitignore" <<'GITIGNORE'
+# Grange toolkit (symlinks back to grange install)
+grow.sh
+reap.sh
+harvest.sh
+distill.sh
+digest.sh
+visions
+specs
+
 # Secrets
 .env
 .env.local
@@ -238,6 +250,15 @@ cmd_adopt() {
   else
     cat >> "$target/.gitignore" <<'GITIGNORE'
 
+# Grange toolkit (symlinks back to grange install)
+grow.sh
+reap.sh
+harvest.sh
+distill.sh
+digest.sh
+visions
+specs
+
 # Grange runtime
 .env
 .env.local
@@ -281,6 +302,88 @@ VISION
   echo "  ./grow.sh start          # let agents work"
 }
 
+cmd_eject() {
+  local target="${1:-.}"
+  target="$(cd "$target" && pwd)"
+
+  if [[ ! -d "$target" ]]; then
+    echo "Error: '$target' is not a directory." >&2
+    exit 1
+  fi
+
+  local project_name
+  project_name=$(basename "$target")
+
+  echo "Ejecting grange from: $target"
+  echo
+
+  # Harvest .md files from project root into specs library
+  local harvest_dir="$GRANGE_HOME/specs/$project_name"
+  local harvest_files=()
+  for f in "$target"/*.md; do
+    [[ -f "$f" ]] || continue
+    harvest_files+=("$f")
+  done
+
+  if [[ ${#harvest_files[@]} -gt 0 ]]; then
+    mkdir -p "$harvest_dir"
+    for f in "${harvest_files[@]}"; do
+      cp "$f" "$harvest_dir/"
+    done
+    echo "  harvested ${#harvest_files[@]} .md files → specs/$project_name/"
+  fi
+
+  # Remove grange symlinks
+  local scripts=(grow.sh reap.sh harvest.sh distill.sh digest.sh)
+  for s in "${scripts[@]}"; do
+    if [[ -L "$target/$s" ]]; then
+      rm "$target/$s"
+      echo "  removed $s"
+    fi
+  done
+
+  for d in visions specs; do
+    if [[ -L "$target/$d" ]]; then
+      rm "$target/$d"
+      echo "  removed $d"
+    fi
+  done
+
+  # Remove runtime state
+  local runtime=(.locks .ike-state .git-commit-signal LOG.md)
+  for f in "${runtime[@]}"; do
+    if [[ -e "$target/$f" ]]; then
+      rm -rf "$target/$f"
+      echo "  removed $f"
+    fi
+  done
+
+  # Remove agent working files
+  local workfiles=(PLAN.md BLOCKERS.md CUTS.md DRIFT.md VISION_REVIEW.md HUMAN_DIGEST.md DONE.md)
+  for f in "${workfiles[@]}"; do
+    if [[ -f "$target/$f" ]]; then
+      rm "$target/$f"
+      echo "  removed $f"
+    fi
+  done
+
+  # Clean grange entries from .gitignore
+  if [[ -f "$target/.gitignore" ]]; then
+    # Remove the grange toolkit and runtime blocks
+    sed -i '/^# Grange toolkit/,/^$/d; /^# Grange runtime/,/^$/d' "$target/.gitignore"
+    # Remove any remaining grange-specific lines from init-style gitignore
+    sed -i '/^grow\.sh$/d; /^reap\.sh$/d; /^harvest\.sh$/d; /^distill\.sh$/d; /^digest\.sh$/d' "$target/.gitignore"
+    sed -i '/^visions$/d; /^specs$/d' "$target/.gitignore"
+    sed -i '/^\.ike-state$/d; /^\.git-commit-signal$/d; /^\.locks\/$/d; /^LOG\.md$/d' "$target/.gitignore"
+    # Clean up consecutive blank lines
+    sed -i '/^$/N;/^\n$/d' "$target/.gitignore"
+    echo "  cleaned .gitignore"
+  fi
+
+  echo
+  echo "Done. Grange has been removed. .md files harvested to specs/$project_name/."
+}
+
 # --- Main ---
 
 if [[ $# -eq 0 ]]; then
@@ -299,6 +402,9 @@ case "${1:-}" in
     ;;
   adopt)
     cmd_adopt "${2:-.}"
+    ;;
+  eject)
+    cmd_eject "${2:-.}"
     ;;
   dashboard)
     launch_dashboard "$(cd "${2:-.}" && pwd)"

@@ -54,6 +54,10 @@ cd my-app
 cp .env.example .env  # add your API keys
 edit VISION.md        # define what you're building
 ./grow.sh start       # let agents work
+
+# Or bring grange into an existing project:
+cd ~/Projects/existing-app
+grange adopt
 ```
 
 ## Installation
@@ -74,9 +78,16 @@ ln -s "$(pwd)/grange.sh" /usr/local/bin/grange
 `grange` is the global entry point. It scaffolds new projects with symlinks back to the toolkit.
 
 ```bash
-grange init <dir>     # create a new project scaffold
-grange help           # show usage
+grange init <dir>        # create a new project scaffold
+grange adopt [dir]       # bring grange into an existing project
+grange eject [dir]       # remove grange from a completed project
+grange dashboard [dir]   # launch the dashboard for a project
+grange help              # show usage
 ```
+
+Both `init` and `adopt` automatically launch the dashboard in the browser.
+
+### grange init
 
 `grange init` creates:
 
@@ -94,7 +105,26 @@ my-project/
 └── VISION.md     (placeholder)
 ```
 
-Scripts are symlinked so updates to the toolkit propagate automatically. Config files are copied since they're project-specific.
+Scripts and directories are symlinked so updates to the toolkit propagate automatically. All grange symlinks are gitignored — only your project code gets committed. Config files are copied since they're project-specific.
+
+### grange adopt
+
+`grange adopt` brings grange into an existing project directory. It creates the same symlinks and config as `init` but is safe for ongoing work:
+
+- Skips any files/symlinks that already exist (never clobbers)
+- Appends grange entries to `.gitignore` instead of overwriting
+- Skips git init if already a repo
+- Idempotent — safe to run multiple times
+
+### grange eject
+
+`grange eject` cleanly removes grange from a completed project:
+
+- Harvests `.md` files from the project root into the grange specs library
+- Removes all grange symlinks (only symlinks, never regular files)
+- Removes runtime state (`.locks/`, `.ike-state`, `.git-commit-signal`, `LOG.md`)
+- Removes agent working files (`PLAN.md`, `BLOCKERS.md`, `CUTS.md`, etc.)
+- Cleans grange entries from `.gitignore`
 
 ## Requirements
 
