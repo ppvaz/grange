@@ -553,12 +553,17 @@ CHECKLIST (all must be true to declare done):
 3. Check BLOCKERS.md - must be empty or all issues resolved
 4. If the project has a build command, run it - must pass with no errors
 5. If the project has tests, run them - must pass
+6. Read VISION_REVIEW.md - note any observations from the Visionary that were never addressed or resolved
 
 DECISION:
 - If ALL checks pass: create DONE.md containing:
   - Summary of what was achieved (2-3 sentences)
   - List of completed tasks from PLAN.md
   - Build/test status confirmation
+  - Unaddressed Vision Reviews: list any VISION_REVIEW.md entries whose concerns
+    were not resolved. For each, include the original Observation and a brief note
+    on the potential risk or gap it may introduce. If all entries were addressed
+    or VISION_REVIEW.md doesn't exist, note that no unresolved observations remain.
 - If ANY check fails: add a task to PLAN.md describing what needs to be fixed.
   Format: '- [ ] Fix: <specific issue found>'
   Be specific (e.g., '- [ ] Fix: test_auth failing - expected 200, got 401')
