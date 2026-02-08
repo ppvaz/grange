@@ -311,27 +311,11 @@ cmd_eject() {
     exit 1
   fi
 
-  local project_name
-  project_name=$(basename "$target")
-
   echo "Ejecting grange from: $target"
   echo
 
-  # Harvest .md files from project root into specs library
-  local harvest_dir="$GRANGE_HOME/specs/$project_name"
-  local harvest_files=()
-  for f in "$target"/*.md; do
-    [[ -f "$f" ]] || continue
-    harvest_files+=("$f")
-  done
-
-  if [[ ${#harvest_files[@]} -gt 0 ]]; then
-    mkdir -p "$harvest_dir"
-    for f in "${harvest_files[@]}"; do
-      cp "$f" "$harvest_dir/"
-    done
-    echo "  harvested ${#harvest_files[@]} .md files → specs/$project_name/"
-  fi
+  # Run harvest to collect IKE specs and raw .md files
+  "$GRANGE_HOME/harvest.sh" "$target"
 
   # Remove grange symlinks
   local scripts=(grow.sh reap.sh harvest.sh distill.sh digest.sh)
@@ -381,7 +365,7 @@ cmd_eject() {
   fi
 
   echo
-  echo "Done. Grange has been removed. .md files harvested to specs/$project_name/."
+  echo "Done. Grange has been removed."
 }
 
 # --- Main ---

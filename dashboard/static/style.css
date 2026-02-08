@@ -553,7 +553,6 @@ main {
 
 .log-msg .agent-tag.executor  { color: var(--green); }
 .log-msg .agent-tag.planner   { color: var(--blue); }
-.log-msg .agent-tag.critic    { color: var(--amber); }
 .log-msg .agent-tag.gap       { color: #c084fc; }
 .log-msg .agent-tag.oracle    { color: #f472b6; }
 .log-msg .agent-tag.visionary { color: #fb923c; }

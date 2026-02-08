@@ -195,8 +195,34 @@ main() {
     count=$((count + 1))
   done
 
+  # Phase 2: Copy raw .md files from project root
+  local raw_count=0
+  for f in "$project_path"/*.md; do
+    [[ -f "$f" ]] || continue
+    local fname
+    fname=$(basename "$f")
+
+    if [[ -f "$specs_dir/$fname" && "$dry_run" == "false" ]]; then
+      log "${YELLOW}[Skip]${NC} Already exists: $fname"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    if [[ "$dry_run" == "true" ]]; then
+      log "${BLUE}[Dry Run]${NC} Would copy: $fname"
+    else
+      cp "$f" "$specs_dir/"
+    fi
+    raw_count=$((raw_count + 1))
+  done
+
+  if [[ $raw_count -gt 0 ]]; then
+    log "${BLUE}[Harvest]${NC} Copied $raw_count .md files from project root"
+  fi
+
+  local total=$((count + raw_count))
   echo ""
-  log "${GREEN}[Harvest]${NC} Done: $count specs ${dry_run:+would be }created, $skipped skipped (already exist)"
+  log "${GREEN}[Harvest]${NC} Done: $total harvested ($count specs converted, $raw_count raw copied), $skipped skipped"
 }
 
 main "$@"

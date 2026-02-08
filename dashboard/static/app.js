@@ -150,7 +150,7 @@
   // --- Renderers ---
 
   const agentColors = {
-    Executor: 'executor', Planner: 'planner', Critic: 'critic',
+    Executor: 'executor', Planner: 'planner',
     Gap: 'gap', Oracle: 'oracle', Visionary: 'visionary'
   };
 

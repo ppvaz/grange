@@ -496,16 +496,17 @@ SPEC LIBRARY: There are specs available in specs/. Before adding a task:
 Specs contain acceptance criteria — use them to make tasks more precise."
   fi
 
-  run_agent "Planner" "You are the Planner agent. Review VISION.md and PLAN.md. Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md.${spec_context}"
+  run_agent "Planner" "You are the Planner agent. Review VISION.md and PLAN.md.
+
+ALIGNMENT CHECK (do this first):
+Before adding anything, review existing incomplete tasks. If any no longer serve the vision or are redundant, remove them and log what you cut to CUTS.md with reasoning. Be conservative — only cut what clearly doesn't fit.
+
+THEN: Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md.${spec_context}"
 
   # Kick off Executor immediately if Planner added tasks (don't wait for watcher debounce)
   if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
     executor &
   fi
-}
-
-critic() {
-  run_agent "Critic" "You are the Critic agent. Review PLAN.md against VISION.md. If any task doesn't serve the vision or is redundant, remove it and log what you cut to CUTS.md with reasoning. If everything aligns well, do nothing. Be conservative - only cut what clearly doesn't fit."
 }
 
 gap_finder() {
@@ -653,10 +654,8 @@ watch_plan() {
     fi
     echo "$now" > "$last_trigger_file"
 
-    log "${BLUE}[Watcher]${NC} PLAN.md changed, triggering agents..."
+    log "${BLUE}[Watcher]${NC} PLAN.md changed, triggering Executor..."
     executor &
-    sleep 2
-    critic &
   }
 
   if [[ "$USE_FSWATCH" == true ]]; then
@@ -692,8 +691,6 @@ watch_vision() {
     echo "$now" > "$last_trigger_file"
 
     log "${BLUE}[Watcher]${NC} VISION.md changed, re-evaluating plan..."
-    critic &
-    sleep 5
     planner &
   }
 
@@ -961,10 +958,6 @@ case "${1:-start}" in
     init_workspace
     planner
     ;;
-  critic)
-    init_workspace
-    critic
-    ;;
   gap)
     init_workspace
     gap_finder
@@ -991,7 +984,7 @@ case "${1:-start}" in
     tail -20 "$LOG_FILE" 2>/dev/null || echo "(empty)"
     ;;
   *)
-    echo "Usage: $0 {start|executor|planner|critic|gap|oracle|visionary|status}"
+    echo "Usage: $0 {start|executor|planner|gap|oracle|visionary|status}"
     exit 1
     ;;
 esac

@@ -2,7 +2,7 @@
 
 Two big ideas, one toolkit.
 
-**Autonomous agent orchestration.** `grow.sh` is an event-driven system where six specialized AI agents self-organize around a vision document. They plan, execute, review each other's work, detect drift, and course-correct — reacting to file changes rather than running on timers. An Oracle agent decides when the vision has been achieved. A Visionary agent watches for systemic problems and triggers course corrections. The system runs unattended until the job is done or a human intervenes.
+**Autonomous agent orchestration.** `grow.sh` is an event-driven system where five specialized AI agents self-organize around a vision document. They plan, execute, review each other's work, detect drift, and course-correct — reacting to file changes rather than running on timers. An Oracle agent decides when the vision has been achieved. A Visionary agent watches for systemic problems and triggers course corrections. The system runs unattended until the job is done or a human intervenes.
 
 **Institutional knowledge extraction.** `reap.sh` walks the IKE pipeline — analyzing existing projects through business analyst, product manager, and QA lenses to extract the knowledge that lives in people's heads and between the lines. Not just code: business models, value propositions, user journeys, domain rules, integration contracts. Technology-agnostic knowledge that can be harvested into spec libraries and distilled into reusable patterns across projects.
 
@@ -135,13 +135,12 @@ Scripts and directories are symlinked so updates to the toolkit propagate automa
 
 ## grow.sh — Autonomous Agent Orchestration
 
-Six agents react to file system events, self-correct, and converge on a vision:
+Five agents react to file system events, self-correct, and converge on a vision:
 
 | Agent | Role | Trigger |
 |-------|------|---------|
 | **Executor** | Completes tasks from PLAN.md, commits changes | PLAN.md changes, git commits, heartbeat |
-| **Planner** | Reviews vision, adds concrete next steps | VISION.md changes, git commits |
-| **Critic** | Validates task alignment, removes what doesn't fit | PLAN.md and VISION.md changes |
+| **Planner** | Reviews vision, adds concrete next steps, validates alignment | VISION.md changes, git commits |
 | **Gap Finder** | Checks each commit against the vision for drift | Git commits |
 | **Oracle** | Decides when the vision is fully achieved | All tasks complete |
 | **Visionary** | Watches for systemic problems, suggests course corrections | Signal accumulation (3+ observations) |
@@ -161,8 +160,7 @@ Six agents react to file system events, self-correct, and converge on a vision:
 
 # Run individual agents
 ./grow.sh executor    # Execute tasks from PLAN.md
-./grow.sh planner     # Add tasks based on VISION.md
-./grow.sh critic      # Validate task alignment
+./grow.sh planner     # Add tasks based on VISION.md (includes alignment validation)
 ./grow.sh gap         # Check implementation against vision
 ./grow.sh oracle      # Review project holistically
 ./grow.sh visionary   # Analyze patterns and refine vision
@@ -178,7 +176,7 @@ Six agents react to file system events, self-correct, and converge on a vision:
 | `VISION.md` | Project goals — the contract agents work toward |
 | `PLAN.md` | Actionable task checklist |
 | `BLOCKERS.md` | Obstacles preventing progress |
-| `CUTS.md` | Out-of-scope tasks (removed by Critic) |
+| `CUTS.md` | Out-of-scope tasks (removed by Planner during alignment checks) |
 | `DRIFT.md` | Implementation deviations (flagged by Gap Finder) |
 | `VISION_REVIEW.md` | Observations for vision refinement (from Visionary) |
 | `DONE.md` | Completion marker — Oracle creates this when the vision is achieved |
@@ -204,8 +202,7 @@ SMART_AGENTS="Oracle,Visionary,Executor" ./grow.sh start
 | **Oracle** | Opus | Critical completion decision. Wrong call = premature stop or infinite loop. |
 | **Visionary** | Opus | Sophisticated pattern recognition across signal files. Runs infrequently. |
 | **Executor** | GLM | Runs frequently. Can iterate on mistakes. Cheaper model with more tries works. |
-| **Planner** | GLM | Runs frequently. Tasks get validated by Critic anyway. |
-| **Critic** | GLM | Simple alignment checks. High frequency, low complexity. |
+| **Planner** | GLM | Runs frequently. Includes alignment validation. |
 | **Gap Finder** | GLM | Reviews one commit at a time. Errors are recoverable. |
 
 ### Design
