@@ -45,7 +45,7 @@
     const byStatus = stats.byStatus || {};
     statsBar.innerHTML = `
       <div class="stat">
-        <span class="stat-value">${(byStatus.active || 0) + (byStatus.stalled || 0) + (byStatus['new'] || 0)}</span>
+        <span class="stat-value">${(byStatus.active || 0) + (byStatus.ike || 0) + (byStatus.stalled || 0) + (byStatus['new'] || 0)}</span>
         <span class="stat-label">In Progress</span>
       </div>
       <div class="stat">
@@ -85,12 +85,24 @@
 
     projectsGrid.innerHTML = projects.map(function (p) {
       const pct = progressPercent(p.done, p.total);
-      const progressHtml = p.total > 0
-        ? `<div class="card-progress">
+      let progressHtml;
+      if (p.pipeline && p.pipeline.active) {
+        const stage = p.pipeline.stages.find(function (s) { return s.status === 'active'; });
+        const label = stage ? stage.name : 'Starting';
+        const stageId = stage ? stage.id : '';
+        const ikePct = Math.round(((p.pipeline.currentStage + 1) / p.pipeline.stages.length) * 100);
+        progressHtml = `<div class="card-progress">
+             <div class="progress-bar"><div class="progress-fill ike-fill" style="width:${ikePct}%"></div></div>
+             <span class="progress-text">IKE: ${escapeHtml(label)}${stageId ? ' (' + escapeHtml(stageId) + ')' : ''}</span>
+           </div>`;
+      } else if (p.total > 0) {
+        progressHtml = `<div class="card-progress">
              <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
              <span class="progress-text">${p.done}/${p.total} tasks</span>
-           </div>`
-        : '<div class="card-progress"><span class="progress-text no-tasks">No tasks yet</span></div>';
+           </div>`;
+      } else {
+        progressHtml = '<div class="card-progress"><span class="progress-text no-tasks">No tasks yet</span></div>';
+      }
 
       const signalsHtml = p.signals > 0
         ? `<span class="card-signals" title="${p.signals} signal file(s)">${p.signals} signals</span>`

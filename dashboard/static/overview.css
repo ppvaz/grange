@@ -161,6 +161,11 @@
   color: var(--green);
 }
 
+.card-badge.status-ike {
+  background: var(--blue-dim);
+  color: var(--blue);
+}
+
 .card-goal {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -188,6 +193,10 @@
   background: var(--green);
   border-radius: 2px;
   transition: width 400ms ease;
+}
+
+.progress-fill.ike-fill {
+  background: var(--blue);
 }
 
 .progress-text {

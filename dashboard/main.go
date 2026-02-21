@@ -83,17 +83,18 @@ type DashboardState struct {
 // Multi-project types
 
 type ProjectSummary struct {
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	Status     string `json:"status"`
-	Done       int    `json:"done"`
-	Total      int    `json:"total"`
-	Commits    int    `json:"commits"`
-	LastCommit string `json:"lastCommit"`
-	LastEpoch  int64  `json:"lastEpoch"`
-	Goal       string `json:"goal"`
-	HasDone    bool   `json:"hasDone"`
-	Signals    int    `json:"signals"`
+	Name       string        `json:"name"`
+	Path       string        `json:"path"`
+	Status     string        `json:"status"`
+	Done       int           `json:"done"`
+	Total      int           `json:"total"`
+	Commits    int           `json:"commits"`
+	LastCommit string        `json:"lastCommit"`
+	LastEpoch  int64         `json:"lastEpoch"`
+	Goal       string        `json:"goal"`
+	HasDone    bool          `json:"hasDone"`
+	Signals    int           `json:"signals"`
+	Pipeline   *PipelineInfo `json:"pipeline,omitempty"`
 }
 
 type AttentionItem struct {
@@ -401,18 +402,30 @@ func discoverProjects(dir string) []string {
 	}
 
 	var projects []string
+	seen := make(map[string]bool)
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		growPath := filepath.Join(dir, entry.Name(), "grow.sh")
+		projectDir := filepath.Join(dir, entry.Name())
+
+		// Check for grow.sh symlink pointing to grange
+		growPath := filepath.Join(projectDir, "grow.sh")
 		target, err := filepath.EvalSymlinks(growPath)
-		if err != nil {
-			continue
+		if err == nil {
+			expectedTarget := filepath.Join(grangeDir, "grow.sh")
+			if target == expectedTarget {
+				projects = append(projects, projectDir)
+				seen[projectDir] = true
+				continue
+			}
 		}
-		expectedTarget := filepath.Join(grangeDir, "grow.sh")
-		if target == expectedTarget {
-			projects = append(projects, filepath.Join(dir, entry.Name()))
+
+		// Check for .ike-state (IKE-only projects without grow.sh)
+		ikeState := filepath.Join(projectDir, ".ike-state")
+		if _, err := os.Stat(ikeState); err == nil && !seen[projectDir] {
+			projects = append(projects, projectDir)
 		}
 	}
 	return projects
@@ -493,18 +506,21 @@ func readProjectSummary(dir string) ProjectSummary {
 	plan := readPlan(dir)
 	commits, lastCommit, lastEpoch := gitStats(dir)
 	hasDone := checkDone(dir)
+	pipeline := readPipeline(dir)
 
 	total := plan.Completed + plan.Pending
 	status := "new"
 	if hasDone {
 		status = "done"
+	} else if pipeline.Active && total == 0 {
+		status = "ike"
 	} else if lastEpoch > 0 && time.Since(time.Unix(lastEpoch, 0)) < 7*24*time.Hour {
 		status = "active"
 	} else if total > 0 {
 		status = "stalled"
 	}
 
-	return ProjectSummary{
+	summary := ProjectSummary{
 		Name:       filepath.Base(dir),
 		Path:       dir,
 		Status:     status,
@@ -517,6 +533,10 @@ func readProjectSummary(dir string) ProjectSummary {
 		HasDone:    hasDone,
 		Signals:    countSignals(dir),
 	}
+	if pipeline.Active {
+		summary.Pipeline = &pipeline
+	}
+	return summary
 }
 
 func buildAttention(projects []ProjectSummary) []AttentionItem {
@@ -657,8 +677,8 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 		projects = append(projects, readProjectSummary(dir))
 	}
 
-	// Sort: active, stalled, new, done
-	statusOrder := map[string]int{"active": 0, "stalled": 1, "new": 2, "done": 3}
+	// Sort: active, ike, stalled, new, done
+	statusOrder := map[string]int{"active": 0, "ike": 1, "stalled": 2, "new": 3, "done": 4}
 	sort.Slice(projects, func(i, j int) bool {
 		return statusOrder[projects[i].Status] < statusOrder[projects[j].Status]
 	})
