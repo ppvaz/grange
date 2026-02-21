@@ -7,6 +7,11 @@
   let prevState = null;
   let pollTimer = null;
 
+  // Multi-project support: read ?project= param for drill-down
+  const urlParams = new URLSearchParams(window.location.search);
+  const projectParam = urlParams.get('project');
+  const apiSuffix = projectParam ? '?project=' + encodeURIComponent(projectParam) : '';
+
   // --- DOM refs ---
 
   const $ = (id) => document.getElementById(id);
@@ -138,7 +143,7 @@
 
   async function viewFile(key, title) {
     try {
-      const resp = await fetch('/api/file/' + key);
+      const resp = await fetch('/api/file/' + key + apiSuffix);
       if (!resp.ok) throw new Error('Not found');
       const text = await resp.text();
       openModal(title, renderMarkdown(text));
@@ -222,7 +227,7 @@
       return;
     }
     // Fetch and render inline
-    fetch('/api/file/vision')
+    fetch('/api/file/vision' + apiSuffix)
       .then(function (resp) { return resp.ok ? resp.text() : Promise.reject(); })
       .then(function (text) { visionBody.innerHTML = renderMarkdown(text); })
       .catch(function () {
@@ -355,7 +360,7 @@
 
   async function poll() {
     try {
-      const resp = await fetch('/api/state');
+      const resp = await fetch('/api/state' + apiSuffix);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const state = await resp.json();
       setConnected(true);

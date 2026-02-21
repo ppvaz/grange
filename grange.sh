@@ -25,6 +25,8 @@ Commands:
   adopt [dir]       Bring grange into an existing project (default: current dir)
   eject [dir]       Remove grange from a completed project (default: current dir)
   dashboard [dir]   Launch the dashboard for a project (default: current dir)
+  dashboard --all [dir]  Launch multi-project overview dashboard
+  status [dir]      Show status of all grange projects in a directory
   help              Show this help
 
 Examples:
@@ -34,7 +36,22 @@ Examples:
   grange adopt ~/Projects/existing-app
   grange eject ~/Projects/completed-app
   grange dashboard
+  grange dashboard --all ~/Projects
+  grange status
+  grange status ~/Projects
 EOF
+}
+
+# --- Utilities ---
+
+port_in_use() {
+  if command -v ss &>/dev/null; then
+    ss -tlnp 2>/dev/null | grep -q ":$1 "
+  elif command -v lsof &>/dev/null; then
+    lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null
+  else
+    return 1
+  fi
 }
 
 launch_dashboard() {
@@ -48,15 +65,6 @@ launch_dashboard() {
 
   # Find a free port starting from 3000
   local port=3000
-  port_in_use() {
-    if command -v ss &>/dev/null; then
-      ss -tlnp 2>/dev/null | grep -q ":$1 "
-    elif command -v lsof &>/dev/null; then
-      lsof -iTCP:"$1" -sTCP:LISTEN &>/dev/null
-    else
-      return 1
-    fi
-  }
   while port_in_use "$port"; do
     ((port++))
     if [[ $port -gt 3099 ]]; then
@@ -76,6 +84,203 @@ launch_dashboard() {
   echo "  dashboard running at $url (pid $pid)"
 
   # Open in browser
+  if command -v xdg-open &>/dev/null; then
+    xdg-open "$url" 2>/dev/null &
+  elif command -v open &>/dev/null; then
+    open "$url" &
+  fi
+}
+
+# --- Multi-project discovery & status ---
+
+discover_projects() {
+  local scan_dir="$1"
+  local projects=()
+  for d in "$scan_dir"/*/; do
+    [[ -d "$d" ]] || continue
+    local grow="$d/grow.sh"
+    if [[ -L "$grow" ]]; then
+      local target
+      target="$(readlink -f "$grow" 2>/dev/null)" || continue
+      if [[ "$target" == "$GRANGE_HOME/grow.sh" ]]; then
+        projects+=("$(cd "$d" && pwd)")
+      fi
+    fi
+  done
+  printf '%s\n' "${projects[@]}"
+}
+
+project_status() {
+  local dir="$1"
+  local name
+  name="$(basename "$dir")"
+
+  # Plan progress
+  local done=0 total=0
+  if [[ -f "$dir/PLAN.md" ]]; then
+    done=$(grep -c '^\s*- \[x\]' "$dir/PLAN.md" 2>/dev/null || true)
+    local pending
+    pending=$(grep -c '^\s*- \[ \]' "$dir/PLAN.md" 2>/dev/null || true)
+    total=$((done + pending))
+  fi
+
+  # Git stats
+  local commits=0 last_activity="never" last_epoch=0
+  if [[ -d "$dir/.git" ]]; then
+    commits=$(git -C "$dir" rev-list --count HEAD 2>/dev/null || echo 0)
+    local git_epoch
+    git_epoch=$(git -C "$dir" log -1 --format='%ct' 2>/dev/null || echo 0)
+    if [[ "$git_epoch" -gt 0 ]]; then
+      last_epoch=$git_epoch
+      local now
+      now=$(date +%s)
+      local diff=$((now - git_epoch))
+      if [[ $diff -lt 3600 ]]; then
+        last_activity="$((diff / 60))m ago"
+      elif [[ $diff -lt 86400 ]]; then
+        last_activity="$((diff / 3600))h ago"
+      else
+        last_activity="$((diff / 86400))d ago"
+      fi
+    fi
+  fi
+
+  # Goal line
+  local goal="-"
+  if [[ -f "$dir/VISION.md" ]]; then
+    goal=$(awk '/^## Goal/{getline; while(/^[[:space:]]*$/){getline}; print; exit}' "$dir/VISION.md" 2>/dev/null)
+    [[ -z "$goal" ]] && goal="-"
+    # Truncate long goals
+    if [[ ${#goal} -gt 50 ]]; then
+      goal="${goal:0:47}..."
+    fi
+  fi
+
+  # Signal files count
+  local signals=0
+  for f in BLOCKERS.md CUTS.md DRIFT.md VISION_REVIEW.md; do
+    if [[ -f "$dir/$f" ]] && [[ -s "$dir/$f" ]]; then
+      ((signals++))
+    fi
+  done
+
+  # Status logic
+  local status
+  if [[ -f "$dir/DONE.md" ]]; then
+    status="done"
+  elif [[ $last_epoch -gt 0 ]] && [[ $(($(date +%s) - last_epoch)) -lt 604800 ]]; then
+    status="active"
+  elif [[ $total -gt 0 ]]; then
+    status="stalled"
+  else
+    status="new"
+  fi
+
+  # Progress string
+  local progress="-"
+  if [[ $total -gt 0 ]]; then
+    progress="$done/$total"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$progress" "$commits" "$last_activity" "$status" "$goal"
+}
+
+cmd_status() {
+  local scan_dir="$1"
+
+  # Default scan dir: parent of cwd if inside a grange project, else ~/Projects
+  if [[ -z "$scan_dir" ]]; then
+    if [[ -L "./grow.sh" ]]; then
+      scan_dir="$(cd .. && pwd)"
+    elif [[ -d "$HOME/Projects" ]]; then
+      scan_dir="$HOME/Projects"
+    else
+      scan_dir="$(pwd)"
+    fi
+  fi
+  scan_dir="$(cd "$scan_dir" && pwd)"
+
+  local projects
+  projects=$(discover_projects "$scan_dir")
+  if [[ -z "$projects" ]]; then
+    echo "No grange projects found in $scan_dir"
+    return
+  fi
+
+  # Collect project data
+  local data=()
+  while IFS= read -r dir; do
+    data+=("$(project_status "$dir")")
+  done <<< "$projects"
+
+  # Sort: active first, then stalled, new, done
+  local sorted=()
+  for status_filter in active stalled new done; do
+    for line in "${data[@]}"; do
+      local s
+      s=$(echo "$line" | cut -f5)
+      [[ "$s" == "$status_filter" ]] && sorted+=("$line")
+    done
+  done
+
+  # Color codes
+  local green='\033[32m' amber='\033[33m' red='\033[31m' dim='\033[2m' reset='\033[0m' bold='\033[1m'
+
+  # Header
+  echo
+  printf "${bold}%-20s %-10s %-8s %-14s %-8s %s${reset}\n" "PROJECT" "PROGRESS" "COMMITS" "LAST ACTIVITY" "STATUS" "GOAL"
+  printf '%.0s─' {1..100}; echo
+
+  for line in "${sorted[@]}"; do
+    local name progress commits last_activity status goal
+    IFS=$'\t' read -r name progress commits last_activity status goal <<< "$line"
+
+    local status_colored
+    case "$status" in
+      active)  status_colored="${green}active${reset}" ;;
+      stalled) status_colored="${amber}stalled${reset}" ;;
+      new)     status_colored="${dim}new${reset}" ;;
+      done)    status_colored="${green}done${reset}" ;;
+    esac
+
+    printf "%-20s %-10s %-8s %-14s " "$name" "$progress" "$commits" "$last_activity"
+    printf "${status_colored}"
+    printf "%-*s" $((8 - ${#status})) ""
+    printf " %s\n" "$goal"
+  done
+  echo
+  printf "${dim}Scan: %s  |  %d projects${reset}\n" "$scan_dir" "${#sorted[@]}"
+  echo
+}
+
+launch_dashboard_all() {
+  local scan_dir="$1"
+  local dashboard_bin="$GRANGE_HOME/dashboard/grange-dashboard"
+
+  if [[ ! -x "$dashboard_bin" ]]; then
+    echo "  dashboard binary not found, skipping"
+    return
+  fi
+
+  local port=3000
+  while port_in_use "$port"; do
+    ((port++))
+    if [[ $port -gt 3099 ]]; then
+      echo "  no free port found (3000-3099), skipping dashboard"
+      return
+    fi
+  done
+
+  "$dashboard_bin" -a -s "$scan_dir" -g "$GRANGE_HOME" -p "$port" &
+  local pid=$!
+  disown "$pid" 2>/dev/null
+
+  sleep 0.3
+
+  local url="http://localhost:$port"
+  echo "  dashboard running at $url (pid $pid)"
+  echo "  scanning: $scan_dir"
+
   if command -v xdg-open &>/dev/null; then
     xdg-open "$url" 2>/dev/null &
   elif command -v open &>/dev/null; then
@@ -391,7 +596,24 @@ case "${1:-}" in
     cmd_eject "${2:-.}"
     ;;
   dashboard)
-    launch_dashboard "$(cd "${2:-.}" && pwd)"
+    if [[ "${2:-}" == "--all" || "${2:-}" == "-a" ]]; then
+      local scan_dir="${3:-}"
+      if [[ -z "$scan_dir" ]]; then
+        if [[ -L "./grow.sh" ]]; then
+          scan_dir="$(cd .. && pwd)"
+        elif [[ -d "$HOME/Projects" ]]; then
+          scan_dir="$HOME/Projects"
+        else
+          scan_dir="$(pwd)"
+        fi
+      fi
+      launch_dashboard_all "$(cd "$scan_dir" && pwd)"
+    else
+      launch_dashboard "$(cd "${2:-.}" && pwd)"
+    fi
+    ;;
+  status)
+    cmd_status "${2:-}"
     ;;
   help|--help|-h)
     usage
