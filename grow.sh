@@ -317,7 +317,9 @@ release_agent_slot() {
 # Args: name, prompt, [timeout_seconds]
 run_agent() {
   local name=$1
-  local prompt=$2
+  local prompt="You are running non-interactively (no human in the loop). Use your tools (Read, Write, Edit, Bash, Glob, Grep) directly to accomplish tasks. Do NOT output text asking for permission — just act.
+
+$2"
   local timeout=${3:-$AGENT_TIMEOUT}  # Optional timeout, defaults to AGENT_TIMEOUT
   local lock_file="$LOCK_DIR/${name}.lock"
   local time_file="$LOCK_DIR/${name}.last"
@@ -559,7 +561,7 @@ CHECKLIST (all must be true to declare done):
      and note remaining integration issues in DONE.md instead of looping
 
 DECISION:
-- If ALL checks pass: create DONE.md containing:
+- If ALL checks pass: use the Write tool to create DONE.md containing:
   - Summary of what was achieved (2-3 sentences)
   - List of completed tasks from PLAN.md
   - Build/test status confirmation
@@ -567,13 +569,39 @@ DECISION:
     were not resolved. For each, include the original Observation and a brief note
     on the potential risk or gap it may introduce. If all entries were addressed
     or VISION_REVIEW.md doesn't exist, note that no unresolved observations remain.
-- If ANY check fails: add a task to PLAN.md describing what needs to be fixed.
+- If ANY check fails: use Edit to add a task to PLAN.md describing what needs to be fixed.
   Format: '- [ ] Fix: <specific issue found>'
   Be specific (e.g., '- [ ] Fix: test_auth failing - expected 200, got 401')
   After running integration checks (step 7), increment the number in .locks/verify_cycles
   (create the file with '1' if it doesn't exist). This prevents infinite fix loops.
 
 Take your time. You have 30 minutes." "$ORACLE_TIMEOUT"
+  local agent_result=$?
+
+  # Fallback: if Oracle exited successfully and all tasks are complete but DONE.md
+  # was not created (e.g. agent asked for permission instead of using Write tool),
+  # generate a fallback DONE.md so grow.sh can terminate.
+  if [[ $agent_result -eq 0 ]] && all_tasks_complete && ! check_done; then
+    log "${YELLOW}[Oracle]${NC} Agent exited 0 with all tasks complete but no DONE.md — creating fallback"
+    {
+      echo "# DONE (fallback — auto-generated)"
+      echo ""
+      echo "**Note:** The Oracle agent completed without creating DONE.md."
+      echo "This fallback was generated because all PLAN.md tasks are marked complete."
+      echo "**Human review recommended** to verify vision fulfillment."
+      echo ""
+      echo "## Completed Tasks"
+      grep '\- \[x\]' "$WORK_DIR/PLAN.md" 2>/dev/null || echo "(none found)"
+      echo ""
+      echo "## Unaddressed Vision Reviews"
+      if [[ -f "$WORK_DIR/VISION_REVIEW.md" ]] && [[ -s "$WORK_DIR/VISION_REVIEW.md" ]]; then
+        echo "VISION_REVIEW.md exists — please review manually for unresolved observations."
+      else
+        echo "No unresolved observations."
+      fi
+    } > "$WORK_DIR/DONE.md"
+    log "${GREEN}[Oracle]${NC} Fallback DONE.md created"
+  fi
 }
 
 visionary() {

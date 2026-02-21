@@ -265,6 +265,82 @@ clean_stage() {
   log "${DIM}[Clean]${NC} ${DIM}Reset transient files for new stage${NC}"
 }
 
+# Check if a stage's key artifacts already exist (for resume skip)
+# Returns 0 if artifacts exist, 1 if not
+stage_artifacts_exist() {
+  local idx=$1
+  local dir="$2"
+
+  case $idx in
+    0)  # 0a — need 3 lens files
+      local lens_count
+      lens_count=$(find "$dir/recon" -maxdepth 1 -name 'lens-*.md' 2>/dev/null | wc -l)
+      (( lens_count >= 3 ))
+      ;;
+    1)  # 0b — synthesis + extraction vision
+      [[ -f "$dir/recon/synthesis.md" ]] && [[ -f "$dir/VISION-stage1-extraction.md" ]]
+      ;;
+    2)  # 1a — non-empty knowledge/entities + confidence summary
+      [[ -d "$dir/knowledge/entities" ]] \
+        && [[ -n "$(ls -A "$dir/knowledge/entities" 2>/dev/null)" ]] \
+        && [[ -f "$dir/knowledge/CONFIDENCE-SUMMARY.md" ]]
+      ;;
+    3)  # 1b — non-empty knowledge/prompts + extraction complete
+      [[ -d "$dir/knowledge/prompts" ]] \
+        && [[ -n "$(ls -A "$dir/knowledge/prompts" 2>/dev/null)" ]] \
+        && [[ -f "$dir/knowledge/EXTRACTION-COMPLETE.md" ]]
+      ;;
+    4)  # 2a — non-empty src/
+      [[ -d "$dir/src" ]] && [[ -n "$(ls -A "$dir/src" 2>/dev/null)" ]]
+      ;;
+    5)  # 2b — rebuild complete report
+      [[ -f "$dir/docs/REBUILD-COMPLETE.md" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Kill lingering grow.sh and orphaned claude processes for a directory
+kill_stale_grow() {
+  local dir="$1"
+  local killed=0
+
+  # Kill grow.sh processes working in this directory
+  local pids
+  pids=$(pgrep -f "grow.sh start" 2>/dev/null || true)
+  for pid in $pids; do
+    # Check if the process's cwd matches our dir
+    local proc_cwd
+    proc_cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+    if [[ "$proc_cwd" == "$dir" ]]; then
+      kill -TERM "$pid" 2>/dev/null && killed=$((killed + 1))
+    fi
+  done
+
+  # Kill orphaned claude processes spawned by grow.sh in this directory
+  # (they have the work dir in their args or cwd)
+  pids=$(pgrep -f "claude.*-p.*" 2>/dev/null || true)
+  for pid in $pids; do
+    local proc_cwd
+    proc_cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+    if [[ "$proc_cwd" == "$dir" ]]; then
+      local parent_cmd
+      parent_cmd=$(ps -o comm= -p "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" 2>/dev/null || true)
+      # Only kill if parent is grow.sh or bash (our wrapper), or parent is dead
+      if [[ "$parent_cmd" == "bash" || "$parent_cmd" == "grow.sh" || -z "$parent_cmd" ]]; then
+        kill -TERM "$pid" 2>/dev/null && killed=$((killed + 1))
+      fi
+    fi
+  done
+
+  if (( killed > 0 )); then
+    log "${YELLOW}[Cleanup]${NC} Killed $killed stale process(es)"
+    sleep 2  # Give processes time to die
+  fi
+}
+
 show_artifacts() {
   local idx=$1
   local dir="$2"
@@ -379,6 +455,28 @@ run_stage() {
     stage_dir="$BUILD_DIR"
     log "${BLUE}[IKE]${NC} Using build directory: $stage_dir"
   fi
+
+  # Skip if stage artifacts already exist (resume optimization)
+  if stage_artifacts_exist "$idx" "$stage_dir"; then
+    log "${GREEN}[IKE]${NC} Stage ${STAGE_IDS[$idx]} artifacts already exist — skipping grow.sh"
+    show_artifacts "$idx" "$stage_dir"
+
+    local continue_result=0
+    prompt_continue "$idx" || continue_result=$?
+
+    if [[ $continue_result -eq 1 ]]; then
+      # User pressed 'r' to force rerun — fall through to normal flow
+      log "${BLUE}[IKE]${NC} Rerunning Stage ${STAGE_IDS[$idx]}..."
+    else
+      # Continue to next stage
+      CURRENT_STAGE=$idx
+      write_state
+      return 0
+    fi
+  fi
+
+  # Kill stale grow.sh / claude processes from previous runs
+  kill_stale_grow "$stage_dir"
 
   clean_stage "$stage_dir"
   prepare_vision "$idx"
@@ -507,7 +605,13 @@ reset_to() {
 
 handle_interrupt() {
   echo ""
-  log "${YELLOW}[IKE]${NC} Interrupted."
+  log "${YELLOW}[IKE]${NC} Interrupted. Cleaning up child processes..."
+
+  # Kill entire process group (grow.sh children, watchers, claude agents)
+  kill -- -$$ 2>/dev/null || true
+  # Also explicitly kill any grow.sh processes for our work dir
+  kill_stale_grow "${WORK_DIR:-.}" 2>/dev/null || true
+
   log "${YELLOW}      ${NC} Resume with: $0 resume ${WORK_DIR:-.}"
   exit 130
 }
