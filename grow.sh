@@ -25,7 +25,7 @@ MIN_INTERVAL=30  # Minimum seconds between runs of same agent
 # Timeout configuration (in seconds)
 DEFAULT_TIMEOUT=600                              # 10 minutes default
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-$DEFAULT_TIMEOUT}"
-ORACLE_TIMEOUT="${ORACLE_TIMEOUT:-900}"          # 15 minutes for thorough check
+ORACLE_TIMEOUT="${ORACLE_TIMEOUT:-1800}"         # 30 minutes (includes boot + integration checks)
 DEBOUNCE_INTERVAL="${DEBOUNCE_INTERVAL:-60}"     # 60 seconds between watcher triggers
 
 # Concurrency control
@@ -548,6 +548,15 @@ CHECKLIST (all must be true to declare done):
 4. If the project has a build command, run it - must pass with no errors
 5. If the project has tests, run them - must pass
 6. Read VISION_REVIEW.md - note any observations from the Visionary that were never addressed or resolved
+7. Boot and verify the running project:
+   - Look at the project structure (docker-compose.yml, package.json, Makefile, etc.)
+     to figure out how to start it
+   - Boot the project, seed any demo/test data if applicable
+   - Verify key endpoints or pages respond (curl health checks, etc.)
+   - If anything crashes or errors: add fix tasks, tear down, and stop
+   - Always clean up (stop containers, kill dev servers) after checking
+   - If .locks/verify_cycles exists and its count >= 3, skip this step
+     and note remaining integration issues in DONE.md instead of looping
 
 DECISION:
 - If ALL checks pass: create DONE.md containing:
@@ -561,8 +570,10 @@ DECISION:
 - If ANY check fails: add a task to PLAN.md describing what needs to be fixed.
   Format: '- [ ] Fix: <specific issue found>'
   Be specific (e.g., '- [ ] Fix: test_auth failing - expected 200, got 401')
+  After running integration checks (step 7), increment the number in .locks/verify_cycles
+  (create the file with '1' if it doesn't exist). This prevents infinite fix loops.
 
-Take your time. You have 15 minutes." "$ORACLE_TIMEOUT"
+Take your time. You have 30 minutes." "$ORACLE_TIMEOUT"
 }
 
 visionary() {
