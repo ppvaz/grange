@@ -604,6 +604,9 @@ reset_to() {
 # ============================================
 
 handle_interrupt() {
+  # Disable trap to prevent re-entry (kill -$$ sends SIGTERM to ourselves too)
+  trap - SIGINT SIGTERM
+
   echo ""
   log "${YELLOW}[IKE]${NC} Interrupted. Cleaning up child processes..."
 
