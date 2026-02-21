@@ -36,9 +36,7 @@ if [[ -f "$WORK_DIR/.env" ]]; then
   set +a
 fi
 
-# Z.ai config (same as digest.sh)
-ZAI_API_KEY="${ZAI_API_KEY:?Error: ZAI_API_KEY not set. Copy .env.example to .env and add your key.}"
-ZAI_BASE_URL="https://api.z.ai/api/anthropic"
+# Using claude-cheap alias (MiniMax) - no API key needed here
 
 # Colors for logging
 BLUE='\033[0;34m'
@@ -72,11 +70,7 @@ call_llm() {
   local attempt
   for attempt in 1 2 3; do
     local result
-    if result=$(
-      export ANTHROPIC_BASE_URL="$ZAI_BASE_URL"
-      export ANTHROPIC_API_KEY="$ZAI_API_KEY"
-      claude --dangerously-skip-permissions -p "$prompt" --model sonnet 2>&1
-    ); then
+    if result=$(claude-cheap -p "$prompt" 2>&1); then
       echo "$result"
       return 0
     fi

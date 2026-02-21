@@ -20,9 +20,7 @@ if [[ -f "$WORK_DIR/.env" ]]; then
   set +a
 fi
 
-# Z.ai config (same as grow.sh iterative agents)
-ZAI_API_KEY="${ZAI_API_KEY:?Error: ZAI_API_KEY not set. Copy .env.example to .env and add your key.}"
-ZAI_BASE_URL="https://api.z.ai/api/anthropic"
+# Using claude-cheap alias (MiniMax) - no API key needed here
 
 # Observation files to digest
 OBSERVATION_FILES=(
@@ -182,13 +180,9 @@ main() {
 
   log "${BLUE}[Digest]${NC} Compiling digest from observation files..."
 
-  # Call Claude via Z.ai (cheap GLM-4.7)
+  # Call Claude via MiniMax (claude-cheap)
   local result
-  if result=$(
-    export ANTHROPIC_BASE_URL="$ZAI_BASE_URL"
-    export ANTHROPIC_API_KEY="$ZAI_API_KEY"
-    claude --dangerously-skip-permissions -p "$prompt" --model sonnet 2>&1
-  ); then
+  if result=$(claude-cheap -p "$prompt" 2>&1); then
     # Write output to HUMAN_DIGEST.md (append with separator)
     {
       echo ""

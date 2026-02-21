@@ -3,8 +3,8 @@
 # Agents react to file changes instead of polling on timers
 #
 # Environment variables:
-#   ZAI_API_KEY      - Z.ai API key for GLM-4.7 (required, set in .env)
-#   SMART_AGENTS     - Agents using Opus 4.6 (default: "Oracle,Visionary")
+#   SMART_AGENTS     - Agents using regular claude (default: "Oracle,Visionary")
+#   CLAUDE_DEBUG     - Enable debug logging (default: true)
 #   CLAUDE_DEBUG     - Enable debug logging (default: true)
 #   AGENT_TIMEOUT    - Default timeout in seconds (default: 600)
 #   ORACLE_TIMEOUT   - Timeout for Oracle (default: 900)
@@ -49,10 +49,9 @@ elif [[ -f "$SCRIPT_DIR/.env" ]]; then
   set +a
 fi
 
-# Dual-API configuration
-ZAI_API_KEY="${ZAI_API_KEY:?Error: ZAI_API_KEY not set. Copy .env.example to .env and add your key.}"
-ZAI_BASE_URL="https://api.z.ai/api/anthropic"
-SMART_AGENTS="${SMART_AGENTS:-Oracle,Visionary}"  # These use native Anthropic/Opus
+# Agent configuration
+# SMART_AGENTS use regular 'claude', others use 'claude-cheap' (defined in ~/.bashrc)
+SMART_AGENTS="${SMART_AGENTS:-Oracle,Visionary}"
 CLAUDE_DEBUG="${CLAUDE_DEBUG:-false}"
 
 # Colors
@@ -391,21 +390,16 @@ run_agent() {
   echo "=== Run started at $(date) ===" >> "$agent_log"
 
   if [[ "$is_smart_agent" == true ]]; then
-    # Smart agents: Opus 4.6 via native Anthropic (uses Claude subscription)
-    log "${BLUE}[$name]${NC} Running with Claude Opus 4.6 (timeout: ${timeout}s)..."
+    # Smart agents use regular claude (Anthropic)
+    log "${BLUE}[$name]${NC} Running with claude (timeout: ${timeout}s)..."
     (
-      unset ANTHROPIC_BASE_URL  # Use default Anthropic
-      [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
-      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model opus < /dev/null
+      run_with_timeout "$timeout" claude -p "$prompt" < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   else
-    # Iterative agents: GLM-4.7 via Z.ai
-    log "${BLUE}[$name]${NC} Running with GLM-4.7 via Z.ai (timeout: ${timeout}s)..."
+    # Other agents use claude-cheap (MiniMax)
+    log "${BLUE}[$name]${NC} Running with claude-cheap (MiniMax M2.5-highspeed, timeout: ${timeout}s)..."
     (
-      export ANTHROPIC_BASE_URL="$ZAI_BASE_URL"
-      export ANTHROPIC_API_KEY="$ZAI_API_KEY"
-      [[ "$CLAUDE_DEBUG" == "true" ]] && export ANTHROPIC_LOG=debug
-      run_with_timeout "$timeout" claude --dangerously-skip-permissions -p "$prompt" --model sonnet < /dev/null
+      run_with_timeout "$timeout" claude-cheap -p "$prompt" < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   fi
 
