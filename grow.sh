@@ -393,13 +393,13 @@ run_agent() {
     # Smart agents use regular claude (Anthropic)
     log "${BLUE}[$name]${NC} Running with claude (timeout: ${timeout}s)..."
     (
-      run_with_timeout "$timeout" claude -p "$prompt" < /dev/null
+      run_with_timeout "$timeout" claude --allowedTools "Read,Edit,Write,Bash,Glob,Grep" -p "$prompt" < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   else
     # Other agents use claude-cheap (MiniMax)
     log "${BLUE}[$name]${NC} Running with claude-cheap (MiniMax M2.5-highspeed, timeout: ${timeout}s)..."
     (
-      run_with_timeout "$timeout" claude-cheap -p "$prompt" < /dev/null
+      run_with_timeout "$timeout" claude-cheap --allowedTools "Read,Edit,Write,Bash,Glob,Grep" -p "$prompt" < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   fi
 
