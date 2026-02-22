@@ -280,9 +280,15 @@ stage_artifacts_exist() {
     1)  # 0b — synthesis + extraction vision
       [[ -f "$dir/recon/synthesis.md" ]] && [[ -f "$dir/recon/VISION-stage1-extraction.md" ]]
       ;;
-    2)  # 1a — non-empty knowledge/entities + confidence summary
+    2)  # 1a — all four knowledge directories populated + confidence summary
       [[ -d "$dir/knowledge/entities" ]] \
         && [[ -n "$(ls -A "$dir/knowledge/entities" 2>/dev/null)" ]] \
+        && [[ -d "$dir/knowledge/rules" ]] \
+        && [[ -n "$(ls -A "$dir/knowledge/rules" 2>/dev/null)" ]] \
+        && [[ -d "$dir/knowledge/flows" ]] \
+        && [[ -n "$(ls -A "$dir/knowledge/flows" 2>/dev/null)" ]] \
+        && [[ -d "$dir/knowledge/integrations" ]] \
+        && [[ -n "$(ls -A "$dir/knowledge/integrations" 2>/dev/null)" ]] \
         && [[ -f "$dir/knowledge/CONFIDENCE-SUMMARY.md" ]]
       ;;
     3)  # 1b — non-empty knowledge/prompts + extraction complete
@@ -604,8 +610,8 @@ reset_to() {
 # ============================================
 
 handle_interrupt() {
-  # Disable trap to prevent re-entry (kill -$$ sends SIGTERM to ourselves too)
-  trap - SIGINT SIGTERM
+  # Ignore signals during cleanup to prevent re-entry
+  trap '' SIGINT SIGTERM
 
   echo ""
   log "${YELLOW}[IKE]${NC} Interrupted. Cleaning up child processes..."
@@ -614,6 +620,18 @@ handle_interrupt() {
   kill -- -$$ 2>/dev/null || true
   # Also explicitly kill any grow.sh processes for our work dir
   kill_stale_grow "${WORK_DIR:-.}" 2>/dev/null || true
+
+  # Force-kill stragglers (claude processes can be slow to shut down)
+  sleep 1
+  local pgid
+  pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') || true
+  if [[ -n "$pgid" ]]; then
+    local pids
+    pids=$(pgrep -g "$pgid" 2>/dev/null | grep -v "^$$\$" || true)
+    if [[ -n "$pids" ]]; then
+      echo "$pids" | xargs kill -9 2>/dev/null || true
+    fi
+  fi
 
   log "${YELLOW}      ${NC} Resume with: $0 resume ${WORK_DIR:-.}"
   exit 130

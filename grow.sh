@@ -546,6 +546,11 @@ TASK: Determine if the vision is FULLY achieved.
 CHECKLIST (all must be true to declare done):
 1. Read VISION.md - understand the goal
 2. Read PLAN.md - verify ALL tasks are marked [x] complete (no remaining [ ] tasks)
+2b. VERIFY OUTPUT ARTIFACTS: Do NOT trust PLAN.md checkboxes alone. For each 'Done When'
+   criterion in VISION.md that references files or directories, independently verify they
+   exist and are non-empty using Bash (ls) or Glob. If VISION.md says a directory should
+   contain files, verify it does. If artifacts are missing despite tasks being marked
+   complete, uncheck those tasks in PLAN.md and add fix tasks.
 3. Check BLOCKERS.md - must be empty or all issues resolved
 4. If the project has a build command, run it - must pass with no errors
 5. If the project has tests, run them - must pass
@@ -904,6 +909,32 @@ heartbeat() {
 }
 
 # ============================================
+# CLEANUP
+# ============================================
+
+cleanup_and_exit() {
+  # Ignore signals during cleanup to prevent re-entry
+  trap '' SIGINT SIGTERM
+  log "${YELLOW}[Main]${NC} Shutting down..."
+  # Clean up lock state before force-killing (traps won't fire after SIGKILL)
+  rm -rf "$LOCK_DIR"/running_* "$LOCK_DIR"/agent_slot_* 2>/dev/null || true
+  # Kill all processes in our process group (graceful)
+  kill 0 2>/dev/null || true
+  # Brief grace period then force-kill stragglers (skip ourselves)
+  sleep 1
+  local pgid
+  pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') || true
+  if [[ -n "$pgid" ]]; then
+    local pids
+    pids=$(pgrep -g "$pgid" 2>/dev/null | grep -v "^$$$" || true)
+    if [[ -n "$pids" ]]; then
+      echo "$pids" | xargs kill -9 2>/dev/null || true
+    fi
+  fi
+  exit 0
+}
+
+# ============================================
 # MAIN
 # ============================================
 
@@ -938,13 +969,14 @@ main() {
     exit 0
   fi
 
-  # Validate vision before starting work
-  log "${BLUE}[Main]${NC} Validating vision..."
-  visionary "STARTUP CHECK: No work has begun yet. Focus on whether VISION.md is specific, measurable, and actionable. Flag any issues that would cause agents to struggle."
+  # Trap for cleanup — set early so Ctrl+C works during startup checks too
+  trap 'cleanup_and_exit' SIGINT SIGTERM
 
-  # Trap for cleanup
-  trap 'log "${YELLOW}[Main]${NC} Shutting down..."; kill $(jobs -p) 2>/dev/null; exit 0' SIGINT SIGTERM
-  
+  # Validate vision before starting work (background + wait so trap fires immediately)
+  log "${BLUE}[Main]${NC} Validating vision..."
+  visionary "STARTUP CHECK: No work has begun yet. Focus on whether VISION.md is specific, measurable, and actionable. Flag any issues that would cause agents to struggle." &
+  wait $! 2>/dev/null || true
+
   log "${BLUE}[Main]${NC} Starting watchers..."
   
   # Start event watchers
@@ -966,7 +998,8 @@ main() {
     # Empty plan: populate all tasks from vision in one shot
     log "${BLUE}[Main]${NC} Empty plan, populating initial tasks from vision..."
     sleep 2
-    run_agent "Planner" "You are the Planner agent. PLAN.md is empty. Review VISION.md and populate PLAN.md with ALL tasks needed to fulfill the vision. Break the vision into concrete, atomic, actionable tasks. Format each as '- [ ] <task description>'. Order them logically."
+    run_agent "Planner" "You are the Planner agent. PLAN.md is empty. Review VISION.md and populate PLAN.md with ALL tasks needed to fulfill the vision. Break the vision into concrete, atomic, actionable tasks. Format each as '- [ ] <task description>'. Order them logically." &
+    wait $! 2>/dev/null || true
     # Chain into executor now that plan is populated
     if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
       executor &
