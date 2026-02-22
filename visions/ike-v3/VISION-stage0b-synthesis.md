@@ -88,7 +88,7 @@ Output: `recon/complexity-assessment.md`
 ### 5. Generate Extraction Spec
 Using synthesis and hotspot map, generate the Stage 1 VISION customized for this codebase.
 
-Output: `VISION-stage1-extraction.md`
+Output: `recon/VISION-stage1-extraction.md`
 
 This should include:
 - Specific entities to extract (from unified model)
@@ -98,21 +98,25 @@ This should include:
 - Confidence levels carried forward
 - Extraction priorities ordered by business criticality
 
+**Important:** Do NOT include an "Output Artifacts" section describing where Stage 1a
+should write files. That is defined by the Stage 1a VISION template, not this spec.
+This spec only describes WHAT to extract, not WHERE to put it.
+
 ---
 
 ## Output Structure
 ```
 recon/
-├── lens-business-analyst.md    # From Stage 0a
-├── lens-product-manager.md     # From Stage 0a
-├── lens-qa-adversarial.md      # From Stage 0a
-├── HUMAN-CONTEXT.md            # Human-provided (if exists)
-├── synthesis.md                # Reconciled domain model
-├── hotspot-map.md              # Where logic lives
-└── complexity-assessment.md    # Scale and effort
+├── lens-business-analyst.md        # From Stage 0a
+├── lens-product-manager.md         # From Stage 0a
+├── lens-qa-adversarial.md          # From Stage 0a
+├── HUMAN-CONTEXT.md                # Human-provided (if exists)
+├── synthesis.md                    # Reconciled domain model
+├── hotspot-map.md                  # Where logic lives
+├── complexity-assessment.md        # Scale and effort
+└── VISION-stage1-extraction.md     # Generated, customized for this codebase
 
-VISION-stage1-extraction.md     # Generated, customized for this codebase
-BLOCKERS.md                     # Unresolved contradictions (if any)
+BLOCKERS.md                         # Unresolved contradictions (if any)
 ```
 
 ---
@@ -122,14 +126,14 @@ BLOCKERS.md                     # Unresolved contradictions (if any)
 - [ ] All contradictions either resolved or documented in BLOCKERS.md
 - [ ] recon/hotspot-map.md identifies logic concentration points
 - [ ] recon/complexity-assessment.md provides effort estimate
-- [ ] VISION-stage1-extraction.md generated with project-specific details
+- [ ] recon/VISION-stage1-extraction.md generated with project-specific details
 - [ ] All files committed
 
 ---
 
 ## Next Step (Human)
 After DONE.md appears:
-1. Review `VISION-stage1-extraction.md` — is it specific enough?
+1. Review `recon/VISION-stage1-extraction.md` — is it specific enough?
 2. Check BLOCKERS.md — any unresolved items need your input before Stage 1
 3. If satisfied, proceed to Stage 1
 4. If gaps remain, add to HUMAN-CONTEXT.md and re-run Stage 0b

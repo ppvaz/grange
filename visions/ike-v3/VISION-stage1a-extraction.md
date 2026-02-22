@@ -7,15 +7,18 @@ knowledge artifacts. Stop after extraction. Human will review before prompt gene
 ## Inputs Required
 ```
 recon/
-├── synthesis.md                # Unified domain model
-├── hotspot-map.md              # Where to focus
-└── HUMAN-CONTEXT.md            # Human domain knowledge (if exists)
-
-VISION-stage1-extraction.md     # Project-specific extraction spec (from Stage 0b)
+├── synthesis.md                    # Unified domain model
+├── hotspot-map.md                  # Where to focus
+├── HUMAN-CONTEXT.md                # Human domain knowledge (if exists)
+└── VISION-stage1-extraction.md     # Project-specific extraction spec (from Stage 0b)
 ```
 
-Read VISION-stage1-extraction.md first — it contains project-specific entities,
-rules, flows, and integrations to extract.
+Read `recon/VISION-stage1-extraction.md` first — it contains project-specific
+entities, rules, flows, and integrations to extract.
+
+**Note:** `specs/{project}/` may contain function-based spec files from Stage 0b.
+Those are reference material. Stage 1a output goes to `knowledge/` as defined
+in the Output Structure below.
 
 ## Workspace Rules
 - ALL output files go in your working directory (cwd).

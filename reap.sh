@@ -50,7 +50,7 @@ STAGE_DESCRIPTIONS=(
 )
 STAGE_CHECKPOINTS=(
   "Review lens files → Create recon/HUMAN-CONTEXT.md"
-  "Review VISION-stage1-extraction.md → Check BLOCKERS.md"
+  "Review recon/VISION-stage1-extraction.md → Check BLOCKERS.md"
   "Review CONFIDENCE-SUMMARY.md → Validate low-confidence items"
   "Review RISK-REGISTER.md → Check EXTRACTION-COMPLETE.md"
   "Review PROGRESS.md → Unblock issues → Add docs/HUMAN-DECISIONS.md"
@@ -182,14 +182,14 @@ prepare_vision() {
 
   # Stage 1a special: use generated extraction spec from 0b if it exists
   if [[ $idx -eq 2 ]]; then
-    local generated="$WORK_DIR/VISION-stage1-extraction.md"
+    local generated="$WORK_DIR/recon/VISION-stage1-extraction.md"
     if [[ -f "$generated" ]]; then
       log "${BLUE}[Vision]${NC} Using generated extraction spec from Stage 0b"
       cp "$generated" "$WORK_DIR/VISION.md"
       return 0
     else
       log "${YELLOW}[Vision]${NC} No generated extraction spec found, using template"
-      log "${YELLOW}        ${NC} (Stage 0b should have created VISION-stage1-extraction.md)"
+      log "${YELLOW}        ${NC} (Stage 0b should have created recon/VISION-stage1-extraction.md)"
     fi
   fi
 
@@ -278,7 +278,7 @@ stage_artifacts_exist() {
       (( lens_count >= 3 ))
       ;;
     1)  # 0b — synthesis + extraction vision
-      [[ -f "$dir/recon/synthesis.md" ]] && [[ -f "$dir/VISION-stage1-extraction.md" ]]
+      [[ -f "$dir/recon/synthesis.md" ]] && [[ -f "$dir/recon/VISION-stage1-extraction.md" ]]
       ;;
     2)  # 1a — non-empty knowledge/entities + confidence summary
       [[ -d "$dir/knowledge/entities" ]] \
@@ -355,7 +355,7 @@ show_artifacts() {
       done
       ;;
     1)  # 0b — Synthesis
-      for f in "$dir"/recon/synthesis.md "$dir"/recon/hotspot-map.md "$dir"/recon/complexity-assessment.md "$dir/VISION-stage1-extraction.md"; do
+      for f in "$dir"/recon/synthesis.md "$dir"/recon/hotspot-map.md "$dir"/recon/complexity-assessment.md "$dir/recon/VISION-stage1-extraction.md"; do
         [[ -f "$f" ]] && log "  ${GREEN}✓${NC} $(basename "$f")"
       done
       ;;
