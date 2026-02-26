@@ -68,8 +68,8 @@ This feature is used by:
 
 - Appears in 6/6 analyzed projects
 
-| Project | Implementation |
-|---------|---------------|
+| Example Domain | Implementation |
+|----------------|---------------|
 | E-commerce | Order with customerId ownership, admin can view all |
 | Project Management | Task with assigneeId, project lead can reassign any |
 | Content Platform | Article with authorId, editor/moderator can edit any |
@@ -79,5 +79,4 @@ This feature is used by:
 
 ## Reference
 
-- Source: cross-project pattern analysis (6 projects)
 - Source: cross-project pattern analysis (6 projects)
