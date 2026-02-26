@@ -131,7 +131,7 @@ Scripts and directories are symlinked so updates to the toolkit propagate automa
 - Bash
 - `claude` CLI
 - `inotifywait` (Linux) or `fswatch` (macOS) for file watching
-- Z.ai API key (for GLM-4.7 iterative agents) — see `.env.example`
+- `claude-cheap` CLI alias configured for a cost-efficient model — see `.env.example`
 
 ## grow.sh — Autonomous Agent Orchestration
 
@@ -184,26 +184,26 @@ Five agents react to file system events, self-correct, and converge on a vision:
 
 ### Dual-API routing
 
-All agents use the `claude` CLI. By default, high-stakes agents route through native Anthropic (Opus 4.5) while iterative agents route through Z.ai (GLM-4.7) for cost efficiency. Control with `SMART_AGENTS`:
+All agents use the `claude` CLI. By default, high-stakes agents use `claude` (smart model) while iterative agents use `claude-cheap` (configurable cost-efficient model) for cost efficiency. Control with `SMART_AGENTS`:
 
 ```bash
-# Default: Oracle and Visionary use Opus, rest use GLM
+# Default: Oracle and Visionary use smart model, rest use cheap model
 ./grow.sh start
 
-# Route all agents through Z.ai (GLM-only, no Anthropic subscription needed)
+# Route all agents through cheap model only
 SMART_AGENTS="" ./grow.sh start
 
-# Add Executor to the Opus tier
+# Add Executor to the smart tier
 SMART_AGENTS="Oracle,Visionary,Executor" ./grow.sh start
 ```
 
 | Agent | Default Tier | Rationale |
 |-------|-------------|-----------|
-| **Oracle** | Opus | Critical completion decision. Wrong call = premature stop or infinite loop. |
-| **Visionary** | Opus | Sophisticated pattern recognition across signal files. Runs infrequently. |
-| **Executor** | GLM | Runs frequently. Can iterate on mistakes. Cheaper model with more tries works. |
-| **Planner** | GLM | Runs frequently. Includes alignment validation. |
-| **Gap Finder** | GLM | Reviews one commit at a time. Errors are recoverable. |
+| **Oracle** | Smart | Critical completion decision. Wrong call = premature stop or infinite loop. |
+| **Visionary** | Smart | Sophisticated pattern recognition across signal files. Runs infrequently. |
+| **Executor** | Cheap | Runs frequently. Can iterate on mistakes. Cheaper model with more tries works. |
+| **Planner** | Cheap | Runs frequently. Includes alignment validation. |
+| **Gap Finder** | Cheap | Reviews one commit at a time. Errors are recoverable. |
 
 ### Design
 

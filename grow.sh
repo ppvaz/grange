@@ -377,7 +377,7 @@ $2"
 
   date +%s > "$time_file"
 
-  # Determine if this is a "smart" agent (Opus) or "iterative" agent (GLM-4.7)
+  # Determine if this is a "smart" agent (claude) or "iterative" agent (claude-cheap)
   local is_smart_agent=false
   if [[ ",${SMART_AGENTS}," == *",${name},"* ]]; then
     is_smart_agent=true

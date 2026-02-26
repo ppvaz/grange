@@ -91,7 +91,7 @@ Action: Skip in CI, track separately
 
 ### 4. Async Human Review Batching — IMPLEMENTED
 
-> **Status**: Implemented as `digest.sh`. Called automatically by `grow.sh` when observation files accumulate 10+ new lines (BLOCKERS.md, CUTS.md, DRIFT.md, VISION_REVIEW.md). Compiles new entries into `HUMAN_DIGEST.md` via GLM-4.7.
+> **Status**: Implemented as `digest.sh`. Called automatically by `grow.sh` when observation files accumulate 10+ new lines (BLOCKERS.md, CUTS.md, DRIFT.md, VISION_REVIEW.md). Compiles new entries into `HUMAN_DIGEST.md` via `claude-cheap`.
 
 **Problem**: VISION_REVIEW.md, DRIFT.md, and CUTS.md accumulate observations that don't block execution but require eventual human attention.
 

@@ -21,9 +21,9 @@ Autonomous AI development toolkit using agricultural metaphors. Reap knowledge f
 
 | Agent | Role | API Tier |
 |-------|------|----------|
-| **Executor** | Does tasks from PLAN.md, commits results | Cheap (GLM-4.7) |
-| **Planner** | Adds/cuts tasks, checks alignment with vision | Cheap (GLM-4.7) |
-| **Gap Finder** | Reviews each commit for vision drift | Cheap (GLM-4.7) |
+| **Executor** | Does tasks from PLAN.md, commits results | Cheap (`claude-cheap`) |
+| **Planner** | Adds/cuts tasks, checks alignment with vision | Cheap (`claude-cheap`) |
+| **Gap Finder** | Reviews each commit for vision drift | Cheap (`claude-cheap`) |
 | **Oracle** | Declares vision achieved when all checks pass | Smart (Opus) |
 | **Visionary** | Detects systemic patterns, suggests refinements | Smart (Opus) |
 

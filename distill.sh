@@ -64,7 +64,7 @@ usage() {
   exit 0
 }
 
-# Call Claude via Z.ai with retry
+# Call claude-cheap with retry
 call_llm() {
   local prompt=$1
   local attempt
