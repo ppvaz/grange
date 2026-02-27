@@ -348,6 +348,9 @@ specs
 .locks/
 .ike-state
 .git-commit-signal
+.vision-review-pending
+.vision-reviewed
+.plan-approved
 
 # Logs
 LOG.md
@@ -363,6 +366,44 @@ LOG.md
 # DONE.md
 GITIGNORE
   echo "  created .gitignore"
+
+  # Create template ci.sh
+  cat > "$target/ci.sh" <<'CISH'
+#!/bin/bash
+# ci.sh — Continuous integration script for grange
+# Run automatically by grow.sh after each Executor task and on every commit.
+# Exit 0 = pass, non-zero = fail.
+# Keep this FAST (<30s) — it runs on every commit.
+
+set -euo pipefail
+
+echo "Running CI..."
+
+# Uncomment the section matching your stack:
+
+# --- Node.js ---
+# npm test
+# npx eslint . --max-warnings 0
+
+# --- Python ---
+# python -m pytest
+# python -m flake8 .
+
+# --- Go ---
+# go test ./...
+# go vet ./...
+
+# --- Ruby ---
+# bundle exec rspec
+# bundle exec brakeman -q --no-pager
+
+# --- Generic ---
+# make test
+
+echo "CI passed"
+CISH
+  chmod +x "$target/ci.sh"
+  echo "  created ci.sh (template — uncomment your stack)"
 
   # Create placeholder VISION.md
   cat > "$target/VISION.md" <<'VISION'
@@ -470,6 +511,9 @@ specs
 .locks/
 .ike-state
 .git-commit-signal
+.vision-review-pending
+.vision-reviewed
+.plan-approved
 LOG.md
 GITIGNORE
     echo "  updated .gitignore"

@@ -1,8 +1,8 @@
 # Grange
 
-Two big ideas, one toolkit.
+A toolkit for **disciplined AI-assisted development** — autonomous agent orchestration with XP guardrails, supporting both interactive pair programming and unattended autonomous modes.
 
-**Autonomous agent orchestration.** `grow.sh` is an event-driven system where five specialized AI agents self-organize around a vision document. They plan, execute, review each other's work, detect drift, and course-correct — reacting to file changes rather than running on timers. An Oracle agent decides when the vision has been achieved. A Visionary agent watches for systemic problems and triggers course corrections. The system runs unattended until the job is done or a human intervenes.
+**Autonomous agent orchestration.** `grow.sh` is an event-driven system where five specialized AI agents self-organize around a vision document. They plan, execute, review each other's work, detect drift, and course-correct — reacting to file changes rather than running on timers. An Oracle agent decides when the vision has been achieved. A Visionary agent watches for systemic problems and triggers course corrections. Configurable grow modes let you run interactively with human gates or fully autonomous overnight.
 
 **Institutional knowledge extraction.** `reap.sh` walks the IKE pipeline — analyzing existing projects through business analyst, product manager, and QA lenses to extract the knowledge that lives in people's heads and between the lines. Not just code: business models, value propositions, user journeys, domain rules, integration contracts. Technology-agnostic knowledge that can be harvested into spec libraries and distilled into reusable patterns across projects.
 
@@ -41,6 +41,18 @@ Existing Project (code, docs, website, business model)
 ```
 
 Each tool works standalone. `grow.sh` only needs a `VISION.md` — it doesn't care where that vision came from. `distill.sh` only needs specs in the library. The lifecycle is the full story, but you can enter at any point.
+
+## Methodology
+
+Inspired by Akita's blog post ("Do Zero à Pós-Produção em 1 Semana") — 274 commits, 8 days, 4 apps, 1323 tests. The insight: AI pair programming works when you apply XP discipline. Grange codifies this into automated guardrails:
+
+- **TDD-first**: Executor writes failing tests before implementation
+- **CI on every commit**: `ci.sh` runs tests, linting, security scanning (~22s target)
+- **Small releases**: Each commit is atomic and production-ready
+- **Continuous refactoring**: Gap Finder flags files >300 lines, Visionary signals refactoring needs every N commits
+- **Security as habit**: Gap Finder reviews every diff for security issues, ci.sh runs tooling (Brakeman, bandit, etc.)
+- **Documentation as investment**: Gap Finder generates structured documentation for new patterns, decisions, and conventions — placed where they're most useful for humans and AI agents
+- **Human judgment preserved**: Approval and review gates ensure the human remains "the adult in the room" — pair mode puts them in the driver's seat with interactive Claude Code sessions
 
 ## Quick Start
 
@@ -139,9 +151,9 @@ Five agents react to file system events, self-correct, and converge on a vision:
 
 | Agent | Role | Trigger |
 |-------|------|---------|
-| **Executor** | Completes tasks from PLAN.md, commits changes | PLAN.md changes, git commits, heartbeat |
-| **Planner** | Reviews vision, adds concrete next steps, validates alignment | VISION.md changes, git commits |
-| **Gap Finder** | Checks each commit against the vision for drift | Git commits |
+| **Executor** | Completes tasks from PLAN.md, commits atomic changes | PLAN.md changes, git commits, heartbeat |
+| **Planner** | Reviews vision, adds diverse next steps (features, tests, docs, fixes), validates alignment | VISION.md changes, git commits |
+| **Gap Finder** | 5-dimensional commit review: drift, file size, tests, security, documentation | Git commits |
 | **Oracle** | Decides when the vision is fully achieved | All tasks complete |
 | **Visionary** | Watches for systemic problems, suggests course corrections | Signal accumulation (3+ observations) |
 
@@ -169,6 +181,23 @@ Five agents react to file system events, self-correct, and converge on a vision:
 ./grow.sh status
 ```
 
+### Grow modes
+
+```bash
+GROW_MODE=pair ./grow.sh start                    # Interactive pair: human navigates in real-time
+GROW_MODE=pair PAIR_STYLE=plan ./grow.sh start    # Plan mode: agent plans, human approves, then executes
+GROW_MODE=sleep ./grow.sh start                   # Autonomous: gates OFF, no permission prompts
+GROW_MODE=auto ./grow.sh start                    # Default: read individual ENABLE_* vars
+```
+
+| Mode | Use case | Approval gate | Review gate | Executor |
+|------|----------|--------------|-------------|----------|
+| `pair` | Active development sessions | ON | ON | Interactive (human navigates) |
+| `sleep` | Overnight autonomous runs | OFF | OFF | Autonomous (skip permissions) |
+| `auto` | Custom configuration | Per env var | Per env var | Non-interactive |
+
+In **pair mode**, the Executor runs as an interactive Claude Code session — the human sees the agent's work in real-time and can interrupt to redirect, provide context, or adjust the approach. The agent pilots, the human navigates. Approval and review gates are ON (`touch .plan-approved` / `touch .vision-reviewed`). With `PAIR_STYLE=plan`, the agent explores and proposes changes first, and the human approves before execution. In **sleep mode**, all gates are off, agents run with `--dangerously-skip-permissions` for fully autonomous operation, and the Visionary skips startup validation if the vision hasn't changed.
+
 ### Core files (per run)
 
 | File | Purpose |
@@ -181,6 +210,9 @@ Five agents react to file system events, self-correct, and converge on a vision:
 | `VISION_REVIEW.md` | Observations for vision refinement (from Visionary) |
 | `DONE.md` | Completion marker — Oracle creates this when the vision is achieved |
 | `LOG.md` | Timestamped action log |
+| `.plan-approved` | Signal file: human approves plan (consumed on use) |
+| `.vision-review-pending` | Signal file: Visionary raised concerns (auto-created) |
+| `.vision-reviewed` | Signal file: human acknowledges review (consumed on use) |
 
 ### Dual-API routing
 
@@ -287,5 +319,7 @@ The `visions/` directory contains reusable multi-stage vision templates:
 Use `reap.sh` to automate the full pipeline, or copy stage files manually and run `grow.sh` yourself.
 
 ## Future Directions
+
+The Agile Vibe Code methodology — TDD, CI gates, security reviews, documentation checks — is now built into the agent system. The `GROW_MODE` system provides the foundation for more nuanced autonomy profiles beyond the current pair/sleep/auto presets.
 
 See [PROPOSITION.md](PROPOSITION.md) for draft ideas on extending agent autonomy (auto-resolution of common blockers, threshold-based vision amendments, extended Oracle authority).

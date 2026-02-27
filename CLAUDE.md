@@ -126,6 +126,49 @@ Structure:
 - `SMART_AGENTS` env var controls which agents use Opus vs cheap model (default: `Oracle,Visionary`)
 - `claude` = regular Claude CLI, `claude-cheap` = alias for cheaper model (defined in ~/.bashrc)
 
+## Agile Vibe Code Configuration
+
+Opt-in features inspired by XP + AI pair programming workflow. All backwards-compatible — defaults match original behavior.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GROW_MODE` | `auto` | Preset: `pair` (gates ON), `sleep` (gates OFF), `auto` (individual vars) |
+| `ENABLE_CI` | `auto` | Run `ci.sh` after Executor tasks. `auto`=run if ci.sh exists, `true`=required, `false`=disabled |
+| `ENABLE_APPROVAL_GATE` | `false` | Human must `touch .plan-approved` before Executor runs |
+| `ENABLE_REVIEW_GATE` | `false` | Pause Executor when Visionary raises concerns. `touch .vision-reviewed` to resume |
+| `ENABLE_TDD` | `true` | Executor writes failing tests first, implements to pass |
+| `MAX_FILE_LINES` | `300` | Gap Finder flags files exceeding this line count for refactoring |
+| `REFACTOR_INTERVAL` | `5` | Every N commits, signal Visionary to check for refactoring needs |
+| `PAIR_STYLE` | `interactive` | Executor interaction in pair mode: `interactive` (human navigates in real-time) or `plan` (agent plans, human approves, then executes) |
+| `PAIR_TIMEOUT` | `3600` | Session timeout for interactive Executor (seconds, default 1hr) |
+
+**CI (`ci.sh`)**: A project-level script that runs tests, linting, security scans. Must exit 0 to pass. Keep it fast (<30s). `grange init` generates a template with commented examples for common stacks.
+
+**Approval Gate**: When enabled, Executor won't run until `.plan-approved` exists. Workflow: Planner generates plan → human reviews PLAN.md → `touch .plan-approved` → Executor proceeds. The signal file is consumed on use.
+
+**Gap Finder Checks** (always active):
+1. Vision drift (original)
+2. File size > `MAX_FILE_LINES` → adds refactoring task
+3. Test existence for new source files → adds test task
+4. Security review of diff → flags issues in DRIFT.md
+5. Documentation — generates structured .md files for new patterns, decisions, and conventions (placed contextually: directory README.md, ARCHITECTURE.md, or CLAUDE.md)
+
+**Review Gate**: When enabled (`ENABLE_REVIEW_GATE=true` or `GROW_MODE=pair`), the Executor pauses whenever Visionary writes to VISION_REVIEW.md. The human reviews the observations and runs `touch .vision-reviewed` to resume. Signal files `.vision-review-pending` and `.vision-reviewed` are consumed automatically.
+
+**Interactive Pair Mode**: When `GROW_MODE=pair`, the Executor runs as an interactive Claude Code session — the human can see the agent's work in real-time, interrupt to redirect, provide context, or adjust the approach. The agent pilots (writes code), the human navigates (steers direction). With `PAIR_STYLE=plan`, the Executor starts in `--permission-mode plan` where it explores and proposes changes, and the human approves before execution. In both styles, the Executor runs in the foreground and does not auto-chain — remaining tasks are shown and the human decides when to continue.
+
+**Sleep Mode Permissions**: When `GROW_MODE=sleep`, all agents run with `--dangerously-skip-permissions` for fully autonomous operation without permission prompts blocking execution.
+
+## Grow Modes
+
+Presets that configure multiple variables at once. Individual `ENABLE_*` vars can still override mode defaults.
+
+| Mode | Approval Gate | Review Gate | Startup Visionary | Executor Style | Best For |
+|------|--------------|-------------|-------------------|----------------|----------|
+| `auto` (default) | per ENABLE_* | per ENABLE_* | Hash-based skip | Non-interactive | Custom configs |
+| `pair` | ON | ON | Always runs | Per `PAIR_STYLE` | Active development |
+| `sleep` | OFF | OFF | Hash-based skip | Non-interactive + `--dangerously-skip-permissions` | Overnight runs |
+
 ## Development Notes
 
 - All bash scripts use `set -euo pipefail`

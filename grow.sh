@@ -33,6 +33,45 @@ MAX_AGENTS="${MAX_AGENTS:-2}"                    # Maximum concurrent agents
 AGENT_COUNT_FILE="$LOCK_DIR/agent_count"
 MAX_PENDING_TASKS="${MAX_PENDING_TASKS:-5}"      # Skip Planner if queue is full
 
+# Grow mode — presets for common workflows (individual vars can still override)
+GROW_MODE="${GROW_MODE:-auto}"
+
+if [[ "$GROW_MODE" == "pair" ]]; then
+  ENABLE_CI="${ENABLE_CI:-auto}"
+  ENABLE_APPROVAL_GATE="${ENABLE_APPROVAL_GATE:-true}"
+  ENABLE_REVIEW_GATE="${ENABLE_REVIEW_GATE:-true}"
+  ENABLE_TDD="${ENABLE_TDD:-true}"
+  MAX_FILE_LINES="${MAX_FILE_LINES:-300}"
+  REFACTOR_INTERVAL="${REFACTOR_INTERVAL:-5}"
+  _SKIP_STARTUP_VISIONARY=false   # Always validate in pair mode
+elif [[ "$GROW_MODE" == "sleep" ]]; then
+  ENABLE_CI="${ENABLE_CI:-auto}"
+  ENABLE_APPROVAL_GATE="${ENABLE_APPROVAL_GATE:-false}"
+  ENABLE_REVIEW_GATE="${ENABLE_REVIEW_GATE:-false}"
+  ENABLE_TDD="${ENABLE_TDD:-true}"
+  MAX_FILE_LINES="${MAX_FILE_LINES:-300}"
+  REFACTOR_INTERVAL="${REFACTOR_INTERVAL:-5}"
+  _SKIP_STARTUP_VISIONARY=auto    # Hash-based skip
+else  # auto (default) — backwards-compatible
+  ENABLE_CI="${ENABLE_CI:-auto}"
+  ENABLE_APPROVAL_GATE="${ENABLE_APPROVAL_GATE:-false}"
+  ENABLE_REVIEW_GATE="${ENABLE_REVIEW_GATE:-false}"
+  ENABLE_TDD="${ENABLE_TDD:-true}"
+  MAX_FILE_LINES="${MAX_FILE_LINES:-300}"
+  REFACTOR_INTERVAL="${REFACTOR_INTERVAL:-5}"
+  _SKIP_STARTUP_VISIONARY=auto
+fi
+
+# Pair mode execution style (only used when GROW_MODE=pair)
+PAIR_STYLE="${PAIR_STYLE:-interactive}"  # interactive | plan
+PAIR_TIMEOUT="${PAIR_TIMEOUT:-3600}"     # 1 hour default for interactive sessions
+
+COMMIT_COUNT_FILE="$LOCK_DIR/commit_count"
+APPROVAL_SIGNAL="$WORK_DIR/.plan-approved"
+VISION_HASH_FILE="$LOCK_DIR/vision_validated_hash"
+VISION_REVIEW_SIGNAL="$WORK_DIR/.vision-review-pending"
+REVIEW_ACK_SIGNAL="$WORK_DIR/.vision-reviewed"
+
 # Checkpointing
 CHECKPOINT_DIR="$LOCK_DIR/checkpoints"
 
@@ -135,6 +174,8 @@ init_workspace() {
   [[ -f "$AGENT_COUNT_FILE" ]] || echo "0" > "$AGENT_COUNT_FILE"
   # Initialize timeout count file
   [[ -f "$TIMEOUT_COUNT_FILE" ]] || echo "0" > "$TIMEOUT_COUNT_FILE"
+  # Initialize commit count file (for refactoring interval)
+  [[ -f "$COMMIT_COUNT_FILE" ]] || echo "0" > "$COMMIT_COUNT_FILE"
 
   # Clean up stale run markers from previous crashes/kills
   # Only remove markers where the owning process is no longer running
@@ -196,12 +237,20 @@ setup_git_hook() {
   fi
   
   # Append our hook (preserve existing hooks)
-  cat >> "$hook_file" << EOF
+  cat >> "$hook_file" << 'HOOKEOF'
 
-$marker
+# GROW_HOOK
 # Signal grow.sh about new commits
-touch "${GIT_SIGNAL}" 2>/dev/null || true
-EOF
+touch ".git-commit-signal" 2>/dev/null || true
+
+# Run CI in background if available and not disabled
+if [[ "${ENABLE_CI:-auto}" != "false" ]] && [[ -x "./ci.sh" ]]; then
+  (
+    echo "=== Post-commit CI at $(date) ===" >> .locks/ci-hook.log
+    ./ci.sh >> .locks/ci-hook.log 2>&1 && echo "PASS ($(date))" >> .locks/ci-hook.log || echo "FAIL ($(date))" >> .locks/ci-hook.log
+  ) &
+fi
+HOOKEOF
   
   chmod +x "$hook_file"
   log "${GREEN}[Setup]${NC} Installed git post-commit hook"
@@ -312,15 +361,159 @@ release_agent_slot() {
   _atomic_unlock "$lockdir"
 }
 
+# Run CI script (ci.sh) if available/enabled
+# Returns 0 on pass (or CI disabled/not applicable), 1 on failure
+run_ci() {
+  local ci_log="$LOCK_DIR/ci.log"
+
+  if [[ "$ENABLE_CI" == "false" ]]; then
+    return 0
+  fi
+
+  if [[ "$ENABLE_CI" == "true" ]]; then
+    if [[ ! -x "$WORK_DIR/ci.sh" ]]; then
+      log "${RED}[CI]${NC} ENABLE_CI=true but ci.sh not found or not executable"
+      echo "FAIL: ci.sh not found ($(date))" >> "$ci_log"
+      return 1
+    fi
+  fi
+
+  # auto mode: only run if ci.sh exists and is executable
+  if [[ ! -x "$WORK_DIR/ci.sh" ]]; then
+    return 0
+  fi
+
+  log "${BLUE}[CI]${NC} Running ci.sh..."
+  local ci_result=0
+  {
+    echo "=== CI run at $(date) ==="
+    "$WORK_DIR/ci.sh" 2>&1
+  } >> "$ci_log" || ci_result=$?
+
+  if [[ $ci_result -eq 0 ]]; then
+    log "${GREEN}[CI]${NC} Passed"
+    echo "PASS ($(date))" >> "$ci_log"
+  else
+    log "${RED}[CI]${NC} Failed (exit code $ci_result)"
+    echo "FAIL exit=$ci_result ($(date))" >> "$ci_log"
+  fi
+  return $ci_result
+}
+
+# Check approval gate — returns 0 if Executor may proceed
+check_approval_gate() {
+  if [[ "$ENABLE_APPROVAL_GATE" != "true" ]]; then
+    return 0  # Gate disabled, always approved
+  fi
+
+  if [[ -f "$APPROVAL_SIGNAL" ]]; then
+    rm -f "$APPROVAL_SIGNAL"
+    log "${GREEN}[Gate]${NC} Plan approved, Executor may proceed"
+    return 0
+  fi
+
+  log "${YELLOW}[Gate]${NC} Waiting for approval (touch .plan-approved to continue)"
+  return 1
+}
+
+# Check if startup Visionary can be skipped (hash-based + time-based)
+# Returns 0 (skip) if VISION.md unchanged AND Visionary ran within the last hour
+should_skip_startup_visionary() {
+  # Check if stored hash exists
+  if [[ ! -f "$VISION_HASH_FILE" ]]; then
+    return 1  # No stored hash, must run
+  fi
+
+  # Compute current hash
+  local current_hash
+  if command -v md5sum &>/dev/null; then
+    current_hash=$(md5sum "$WORK_DIR/VISION.md" 2>/dev/null | cut -d' ' -f1)
+  elif command -v md5 &>/dev/null; then
+    current_hash=$(md5 -q "$WORK_DIR/VISION.md" 2>/dev/null)
+  else
+    return 1  # No hash tool available, must run
+  fi
+
+  local stored_hash
+  stored_hash=$(cat "$VISION_HASH_FILE" 2>/dev/null)
+
+  if [[ "$current_hash" != "$stored_hash" ]]; then
+    return 1  # Vision changed, must run
+  fi
+
+  # Check if Visionary ran within the last hour
+  local time_file="$LOCK_DIR/Visionary.last"
+  if [[ ! -f "$time_file" ]]; then
+    return 1  # Never ran, must run
+  fi
+
+  local last_run
+  last_run=$(cat "$time_file" 2>/dev/null || echo 0)
+  local now
+  now=$(date +%s)
+  local elapsed=$((now - last_run))
+
+  if (( elapsed > 3600 )); then
+    return 1  # Ran more than 1 hour ago, must run
+  fi
+
+  return 0  # Safe to skip
+}
+
+# Store current VISION.md hash for skip comparison
+save_vision_hash() {
+  local hash
+  if command -v md5sum &>/dev/null; then
+    hash=$(md5sum "$WORK_DIR/VISION.md" 2>/dev/null | cut -d' ' -f1)
+  elif command -v md5 &>/dev/null; then
+    hash=$(md5 -q "$WORK_DIR/VISION.md" 2>/dev/null)
+  else
+    return 0  # No hash tool, silently skip
+  fi
+  echo "$hash" > "$VISION_HASH_FILE"
+}
+
+# Check review gate — returns 0 if Executor may proceed
+check_review_gate() {
+  if [[ "$ENABLE_REVIEW_GATE" != "true" ]]; then
+    return 0  # Gate disabled, always pass
+  fi
+
+  if [[ ! -f "$VISION_REVIEW_SIGNAL" ]]; then
+    return 0  # No pending review, pass
+  fi
+
+  if [[ -f "$REVIEW_ACK_SIGNAL" ]]; then
+    # Human acknowledged the review — consume both signals
+    rm -f "$VISION_REVIEW_SIGNAL" "$REVIEW_ACK_SIGNAL"
+    log "${GREEN}[ReviewGate]${NC} Vision review acknowledged, Executor may proceed"
+    return 0
+  fi
+
+  log "${YELLOW}[ReviewGate]${NC} Waiting for vision review (touch .vision-reviewed to continue)"
+  return 1
+}
+
 # Rate-limited agent runner
 # Prevents same agent from running more than once per MIN_INTERVAL
 # Args: name, prompt, [timeout_seconds]
 run_agent() {
   local name=$1
-  local prompt="You are running non-interactively (no human in the loop). Use your tools (Read, Write, Edit, Bash, Glob, Grep) directly to accomplish tasks. Do NOT output text asking for permission — just act.
-
-$2"
+  local raw_prompt="$2"
   local timeout=${3:-$AGENT_TIMEOUT}  # Optional timeout, defaults to AGENT_TIMEOUT
+
+  # Build prompt preamble based on execution mode
+  local prompt
+  if [[ "$GROW_MODE" == "pair" && "$name" == "Executor" ]]; then
+    prompt="You are pair programming with a human navigator. They can see your work and may interrupt to redirect, provide context, or adjust the approach. Explain your reasoning briefly before acting. Ask when genuinely uncertain.
+
+$raw_prompt"
+    timeout="$PAIR_TIMEOUT"  # Override timeout for interactive sessions
+  else
+    prompt="You are running non-interactively (no human in the loop). Use your tools (Read, Write, Edit, Bash, Glob, Grep) directly to accomplish tasks. Do NOT output text asking for permission — just act.
+
+$raw_prompt"
+  fi
   local lock_file="$LOCK_DIR/${name}.lock"
   local time_file="$LOCK_DIR/${name}.last"
   local run_marker="$LOCK_DIR/running_${name}"
@@ -391,17 +584,40 @@ $2"
   local cmd_result=0
   echo "=== Run started at $(date) ===" >> "$agent_log"
 
-  if [[ "$is_smart_agent" == true ]]; then
-    # Smart agents use regular claude (Anthropic)
+  # Determine base command and sleep-mode permissions
+  local claude_cmd="claude"
+  if [[ "$is_smart_agent" != true ]]; then
+    claude_cmd="claude-cheap"
+  fi
+
+  local skip_perms=""
+  if [[ "$GROW_MODE" == "sleep" ]]; then
+    skip_perms="--dangerously-skip-permissions"
+  fi
+
+  if [[ "$GROW_MODE" == "pair" && "$name" == "Executor" ]]; then
+    # INTERACTIVE PAIR MODE — human navigates, agent pilots
+    if [[ "$PAIR_STYLE" == "plan" ]]; then
+      log "${BLUE}[$name]${NC} Running interactively with --permission-mode plan..."
+      $claude_cmd --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
+        --permission-mode plan "$prompt" 2>&1 | tee -a "$agent_log" || cmd_result=$?
+    else
+      # Default: full interactive
+      log "${BLUE}[$name]${NC} Running interactively (human in the loop)..."
+      $claude_cmd --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
+        "$prompt" 2>&1 | tee -a "$agent_log" || cmd_result=$?
+    fi
+  elif [[ "$is_smart_agent" == true ]]; then
     log "${BLUE}[$name]${NC} Running with claude (timeout: ${timeout}s)..."
     (
-      run_with_timeout "$timeout" claude --allowedTools "Read,Edit,Write,Bash,Glob,Grep" -p "$prompt" < /dev/null
+      run_with_timeout "$timeout" claude --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
+        $skip_perms -p "$prompt" < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   else
-    # Other agents use claude-cheap (MiniMax)
-    log "${BLUE}[$name]${NC} Running with claude-cheap (MiniMax M2.5-highspeed, timeout: ${timeout}s)..."
+    log "${BLUE}[$name]${NC} Running with claude-cheap (timeout: ${timeout}s)..."
     (
-      run_with_timeout "$timeout" claude-cheap --allowedTools "Read,Edit,Write,Bash,Glob,Grep" -p "$prompt" < /dev/null
+      run_with_timeout "$timeout" claude-cheap --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
+        $skip_perms -p "$prompt" < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   fi
 
@@ -430,6 +646,12 @@ $2"
 # ============================================
 
 executor() {
+  # In pair mode, only run executor from foreground (interactive).
+  # Background watcher triggers should not launch interactive sessions.
+  if [[ "$GROW_MODE" == "pair" ]] && [[ ! -t 0 ]]; then
+    return 0
+  fi
+
   # Build checkpoint context if a checkpoint exists
   local checkpoint_file="$CHECKPOINT_DIR/executor.md"
   local checkpoint_context=""
@@ -445,8 +667,38 @@ Continue from where it left off. Delete the checkpoint file ($checkpoint_file) o
 "
   fi
 
+  # Build TDD instructions if enabled
+  local tdd_context=""
+  if [[ "$ENABLE_TDD" == "true" ]]; then
+    tdd_context="
+TDD WORKFLOW (mandatory):
+1. Write a failing test FIRST that captures the acceptance criteria
+2. Run the test to confirm it fails (red)
+3. Implement the minimum code to make the test pass (green)
+4. Run ALL tests to ensure nothing broke
+5. Only commit if all tests are green
+If the project has no test framework yet, set one up as your first step.
+"
+  fi
+
+  # Build CI instructions if enabled
+  local ci_context=""
+  if [[ "$ENABLE_CI" != "false" ]] && [[ -x "$WORK_DIR/ci.sh" ]]; then
+    ci_context="
+CI GATE: Before committing, run ./ci.sh and verify it passes. If it fails, fix the issues before committing.
+"
+  fi
+
   run_agent "Executor" "You are the Executor agent. Do the most important incomplete task (- [ ]) in PLAN.md that serves VISION.md. After completing, mark it done (- [x]) and commit with a descriptive message. If blocked, document in BLOCKERS.md. Focus on one task only.
-${checkpoint_context}
+
+COMMIT DISCIPLINE:
+- Each commit must be atomic and production-ready. One logical change per commit.
+
+SIMPLICITY:
+- Prefer the simplest solution that works. If a task could be solved in 40 lines, do not write 200.
+- Avoid state machines, over-abstraction, and premature generalization unless the task explicitly requires them.
+- When in doubt, choose the boring, straightforward approach.
+${tdd_context}${ci_context}${checkpoint_context}
 TIMEOUT HANDLING:
 You have ~10 minutes. If you're working on a complex task and can't complete it:
 1. Save your progress to $checkpoint_file with:
@@ -457,11 +709,42 @@ You have ~10 minutes. If you're working on a complex task and can't complete it:
 2. The next Executor run will resume from your checkpoint."
   local agent_result=$?
 
+  # Post-Executor CI safety net (belt-and-suspenders with prompt instruction)
+  if [[ $agent_result -eq 0 ]]; then
+    run_ci || log "${YELLOW}[CI]${NC} Post-Executor CI failed — Gap Finder will catch this"
+  fi
+
   # Self-chaining: only if run_agent actually ran (not skipped)
   if [[ $agent_result -eq 0 ]]; then
     sleep 3  # Brief pause to let commits/file changes settle
     if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null; then
-      if [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+      if [[ "$GROW_MODE" == "pair" ]]; then
+        # In pair mode, show remaining tasks and prompt to continue
+        local remaining
+        remaining=$(grep -c '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null) || remaining=0
+        echo ""
+        log "${BLUE}[Executor]${NC} Session complete. $remaining tasks remaining:"
+        grep '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null | head -5 | while IFS= read -r task; do
+          log "  $task"
+        done
+        (( remaining > 5 )) && log "  ... and $((remaining - 5)) more"
+        # Mention vision review if Visionary raised concerns
+        if [[ -f "$VISION_REVIEW_SIGNAL" ]]; then
+          echo ""
+          log "${YELLOW}[Executor]${NC} Visionary raised concerns — review VISION_REVIEW.md"
+        fi
+        echo ""
+        local answer
+        read -r -p "  Continue to next task? [Y/n] " answer < /dev/tty || answer="n"
+        case "$answer" in
+          [nN]*)
+            log "${BLUE}[Executor]${NC} Paused."
+            ;;
+          *)
+            executor  # Recurse — locks released via RETURN trap in run_agent
+            ;;
+        esac
+      elif [[ ! -d "$LOCK_DIR/running_Executor" ]] && check_approval_gate && check_review_gate; then
         log "${BLUE}[Executor]${NC} More tasks pending, re-triggering..."
         executor &
       fi
@@ -497,11 +780,21 @@ Specs contain acceptance criteria — use them to make tasks more precise."
 ALIGNMENT CHECK (do this first):
 Before adding anything, review existing incomplete tasks. If any no longer serve the vision or are redundant, remove them and log what you cut to CUTS.md with reasoning. Be conservative — only cut what clearly doesn't fit.
 
-THEN: Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md.${spec_context}"
+THEN: Add ONE concrete next task that moves toward the vision. Tasks should be atomic and actionable. No duplicates. Format: '- [ ] <task description>'. Add to the most logical position in PLAN.md.
+
+TASK DIVERSITY:
+Not every task should be a new feature. Consider adding:
+- Test improvements for under-tested areas
+- Documentation gaps that Gap Finder may have missed (project-level README, onboarding guides)
+- Security hardening tasks
+- Refactoring of complex or overgrown files
+A healthy plan balances features, tests, docs, fixes, and infrastructure.${spec_context}"
 
   # Kick off Executor immediately if Planner added tasks (don't wait for watcher debounce)
   if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
-    executor &
+    if check_approval_gate && check_review_gate; then
+      executor &
+    fi
   fi
 }
 
@@ -523,19 +816,56 @@ Then read the changed files to understand what was done."
 
   run_agent "Gap" "You are the Gap Finder agent.
 
-TASK: Check if the latest commit drifted from VISION.md intent.
+TASK: Review the latest commit across 5 dimensions.
 ${commit_context}
 
 STEPS (be quick - you have 10 minutes):
-1. Get the commit diff/stats
+1. Get the commit diff/stats (git show --stat, git diff HEAD~1)
 2. Read VISION.md to understand the goal
-3. Check: Does this commit align with the vision?
 
-IF DRIFT DETECTED:
-- Add to DRIFT.md with: commit hash, what drifted, why it matters
-- Add corrective task to PLAN.md: '- [ ] Fix drift: <specific issue>'
+CHECK 1 — VISION DRIFT:
+- Does this commit align with the vision?
+- IF DRIFT: Add to DRIFT.md with commit hash, what drifted, why it matters. Add task to PLAN.md: '- [ ] Fix drift: <specific issue>'
 
-IF ALIGNED: Do nothing. Don't log success."
+CHECK 2 — FILE SIZE (>${MAX_FILE_LINES} lines):
+- Run: git diff --name-only HEAD~1 HEAD
+- For each changed file, run: wc -l <file>
+- If any file exceeds ${MAX_FILE_LINES} lines, add to DRIFT.md: 'File size: <file> is <N> lines (threshold: ${MAX_FILE_LINES})'
+- Add task to PLAN.md: '- [ ] Refactor: split <file> (<N> lines, max ${MAX_FILE_LINES})'
+
+CHECK 3 — TEST EXISTENCE:
+- For each NEW source file in the commit (not test files themselves), check if a corresponding test file exists
+- Common patterns: src/foo.ts → tests/foo.test.ts, src/foo.py → tests/test_foo.py, pkg/foo.go → pkg/foo_test.go
+- If no test file exists, add task to PLAN.md: '- [ ] Add tests for <file>'
+
+CHECK 4 — SECURITY REVIEW:
+- Review the diff for obvious security issues:
+  - Hardcoded secrets, API keys, passwords, tokens
+  - SQL injection (string concatenation in queries)
+  - Path traversal (unsanitized user input in file paths)
+  - Missing input validation at system boundaries
+- If found, add to DRIFT.md: 'Security: <issue> in <file>' with severity (high/medium/low)
+- Add task to PLAN.md: '- [ ] Security fix: <specific issue in file>'
+
+CHECK 5 — DOCUMENTATION:
+- Does this commit introduce new patterns, workarounds, or architectural decisions?
+- Does it add a new dependency, integration, or non-obvious configuration?
+- Does it establish a convention that future code should follow?
+- If YES to any: generate a structured .md documentation file.
+  PLACEMENT — choose the most contextually useful location:
+  - For module/directory-specific patterns: create or append to a README.md in that directory
+  - For cross-cutting architectural decisions: append to ARCHITECTURE.md at project root (create if needed)
+  - For conventions that AI agents need to follow: append to CLAUDE.md
+  FORMAT — each entry should include:
+  - A descriptive heading (## Decision/Pattern/Convention: ...)
+  - Date: $(date +%Y-%m-%d)
+  - What: clear explanation of the pattern/decision
+  - Why: reasoning or context behind it
+  - Example: a brief code snippet or reference if helpful
+  After writing, commit the documentation with message: 'docs: [brief description]'
+- Only document genuinely useful knowledge — not trivial implementation details.
+
+IF ALL CHECKS PASS: Do nothing. Don't log success."
 }
 
 oracle() {
@@ -698,7 +1028,9 @@ watch_plan() {
     echo "$now" > "$last_trigger_file"
 
     log "${BLUE}[Watcher]${NC} PLAN.md changed, triggering Executor..."
-    executor &
+    if check_approval_gate && check_review_gate; then
+      executor &
+    fi
   }
 
   if [[ "$USE_FSWATCH" == true ]]; then
@@ -733,6 +1065,9 @@ watch_vision() {
     fi
     echo "$now" > "$last_trigger_file"
 
+    # Invalidate vision hash so next startup re-validates
+    rm -f "$VISION_HASH_FILE"
+
     log "${BLUE}[Watcher]${NC} VISION.md changed, re-evaluating plan..."
     planner &
   }
@@ -748,6 +1083,79 @@ watch_vision() {
   fi
 }
 
+# Watch for .plan-approved signal (only active when ENABLE_APPROVAL_GATE=true)
+watch_approval() {
+  if [[ "$ENABLE_APPROVAL_GATE" != "true" ]]; then
+    return 0  # Gate disabled, don't watch
+  fi
+
+  log "${GREEN}[Watcher]${NC} Monitoring .plan-approved for approval signals..."
+
+  _handle_approval() {
+    if check_done; then
+      log "${GREEN}[Watcher]${NC} DONE.md exists, stopping approval watcher"
+      return 1
+    fi
+
+    if [[ -f "$APPROVAL_SIGNAL" ]]; then
+      rm -f "$APPROVAL_SIGNAL"
+      log "${GREEN}[Gate]${NC} Plan approved! Triggering Executor..."
+      if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+        executor &
+      fi
+    fi
+  }
+
+  if [[ "$USE_FSWATCH" == true ]]; then
+    # Watch the directory for the signal file
+    fswatch -o "$WORK_DIR" --include '.plan-approved' --exclude '.*' 2>/dev/null | while read -r _; do
+      _handle_approval || break
+    done
+  else
+    while read -r dir event file; do
+      [[ "$file" == ".plan-approved" ]] || continue
+      _handle_approval || break
+    done < <(inotifywait -m -e create,moved_to "$WORK_DIR" 2>/dev/null)
+  fi
+}
+
+# Watch for .vision-reviewed signal (only active when ENABLE_REVIEW_GATE=true)
+watch_review() {
+  if [[ "$ENABLE_REVIEW_GATE" != "true" ]]; then
+    return 0  # Gate disabled, don't watch
+  fi
+
+  log "${GREEN}[Watcher]${NC} Monitoring .vision-reviewed for review acknowledgements..."
+
+  _handle_review_ack() {
+    if check_done; then
+      log "${GREEN}[Watcher]${NC} DONE.md exists, stopping review watcher"
+      return 1
+    fi
+
+    if [[ -f "$REVIEW_ACK_SIGNAL" ]]; then
+      rm -f "$VISION_REVIEW_SIGNAL" "$REVIEW_ACK_SIGNAL"
+      log "${GREEN}[ReviewGate]${NC} Vision review acknowledged! Triggering Executor..."
+      if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
+        if check_approval_gate; then
+          executor &
+        fi
+      fi
+    fi
+  }
+
+  if [[ "$USE_FSWATCH" == true ]]; then
+    fswatch -o "$WORK_DIR" --include '.vision-reviewed' --exclude '.*' 2>/dev/null | while read -r _; do
+      _handle_review_ack || break
+    done
+  else
+    while read -r dir event file; do
+      [[ "$file" == ".vision-reviewed" ]] || continue
+      _handle_review_ack || break
+    done < <(inotifywait -m -e create,moved_to "$WORK_DIR" 2>/dev/null)
+  fi
+}
+
 # Watch for signs the vision needs review
 watch_signals() {
   log "${GREEN}[Watcher]${NC} Monitoring BLOCKERS.md, CUTS.md, DRIFT.md for patterns..."
@@ -758,6 +1166,7 @@ watch_signals() {
     echo "blockers:$(wc -l < "$WORK_DIR/BLOCKERS.md" 2>/dev/null || echo 0)"
     echo "cuts:$(wc -l < "$WORK_DIR/CUTS.md" 2>/dev/null || echo 0)"
     echo "drift:$(wc -l < "$WORK_DIR/DRIFT.md" 2>/dev/null || echo 0)"
+    echo "review:$(wc -l < "$WORK_DIR/VISION_REVIEW.md" 2>/dev/null || echo 0)"
   } > "$sizes_file"
 
   _handle_signal_change() {
@@ -809,11 +1218,20 @@ watch_signals() {
       fi
     fi
 
+    # Check if VISION_REVIEW.md grew — trigger review gate if enabled
+    local last_review=$(grep "^review:" "$sizes_file" 2>/dev/null | cut -d: -f2 || echo 0)
+    local curr_review=$(wc -l < "$WORK_DIR/VISION_REVIEW.md" 2>/dev/null || echo 0)
+    if (( curr_review > last_review )) && [[ "$ENABLE_REVIEW_GATE" == "true" ]]; then
+      touch "$VISION_REVIEW_SIGNAL"
+      log "${YELLOW}[ReviewGate]${NC} VISION_REVIEW.md grew, Executor paused until review (touch .vision-reviewed)"
+    fi
+
     # Update sizes file
     {
       echo "blockers:$curr_blockers"
       echo "cuts:$curr_cuts"
       echo "drift:$curr_drift"
+      echo "review:$curr_review"
     } > "$sizes_file"
   }
 
@@ -850,11 +1268,25 @@ watch_commits() {
     log "${BLUE}[Watcher]${NC} New commit detected: ${current_commit:0:8}"
 
     # After a commit: continue executing, check gaps, plan if needed
-    executor &
+    if check_approval_gate && check_review_gate; then
+      executor &
+    fi
     sleep 3
     gap_finder "$current_commit" &
     sleep 3
     planner &
+
+    # Refactoring signal: every REFACTOR_INTERVAL commits, nudge Visionary
+    local lockdir="$COMMIT_COUNT_FILE.lock.d"
+    _atomic_lock "$lockdir"
+    local cc=$(cat "$COMMIT_COUNT_FILE" 2>/dev/null || echo 0)
+    cc=$((cc + 1))
+    echo "$cc" > "$COMMIT_COUNT_FILE"
+    _atomic_unlock "$lockdir"
+    if (( cc % REFACTOR_INTERVAL == 0 )); then
+      log "${BLUE}[Watcher]${NC} $cc commits since last refactoring check, signaling Visionary..."
+      add_signal_count 1
+    fi
 
     # Only invoke Oracle when all tasks are complete (saves expensive Opus calls)
     if all_tasks_complete; then
@@ -890,8 +1322,10 @@ heartbeat() {
 
     # Primary: Run Executor if pending tasks and not already running
     if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
-      executor &
-      sleep 5
+      if check_approval_gate && check_review_gate; then
+        executor &
+        sleep 5
+      fi
     fi
 
     # Secondary: Run Planner if Executor not running (auto-skips if queue full)
@@ -943,8 +1377,13 @@ main() {
   
   log "${GREEN}========================================${NC}"
   log "${GREEN}  Grow.sh - Event-Driven Agent System${NC}"
+  if [[ "$GROW_MODE" == "pair" ]]; then
+    log "${GREEN}  Mode: ${GROW_MODE} (${PAIR_STYLE}) | CI:${ENABLE_CI} Gate:${ENABLE_APPROVAL_GATE} ReviewGate:${ENABLE_REVIEW_GATE} TDD:${ENABLE_TDD}${NC}"
+  else
+    log "${GREEN}  Mode: ${GROW_MODE} | CI:${ENABLE_CI} Gate:${ENABLE_APPROVAL_GATE} ReviewGate:${ENABLE_REVIEW_GATE} TDD:${ENABLE_TDD}${NC}"
+  fi
   log "${GREEN}========================================${NC}"
-  
+
   # Check dependencies (platform-specific file watcher)
   if [[ "$USE_FSWATCH" == true ]]; then
     if ! command -v fswatch &> /dev/null; then
@@ -973,9 +1412,20 @@ main() {
   trap 'cleanup_and_exit' SIGINT SIGTERM
 
   # Validate vision before starting work (background + wait so trap fires immediately)
-  log "${BLUE}[Main]${NC} Validating vision..."
-  visionary "STARTUP CHECK: No work has begun yet. Focus on whether VISION.md is specific, measurable, and actionable. Flag any issues that would cause agents to struggle." &
-  wait $! 2>/dev/null || true
+  if [[ "$_SKIP_STARTUP_VISIONARY" == "false" ]]; then
+    # Pair mode: always validate
+    log "${BLUE}[Main]${NC} Validating vision (pair mode — always validates)..."
+    visionary "STARTUP CHECK: No work has begun yet. Focus on whether VISION.md is specific, measurable, and actionable. Flag any issues that would cause agents to struggle." &
+    wait $! 2>/dev/null || true
+    save_vision_hash
+  elif should_skip_startup_visionary; then
+    log "${GREEN}[Main]${NC} Vision unchanged since last validation, skipping startup Visionary"
+  else
+    log "${BLUE}[Main]${NC} Validating vision..."
+    visionary "STARTUP CHECK: No work has begun yet. Focus on whether VISION.md is specific, measurable, and actionable. Flag any issues that would cause agents to struggle." &
+    wait $! 2>/dev/null || true
+    save_vision_hash
+  fi
 
   log "${BLUE}[Main]${NC} Starting watchers..."
   
@@ -984,6 +1434,8 @@ main() {
   watch_vision &
   watch_commits &
   watch_signals &
+  watch_approval &
+  watch_review &
   heartbeat 600 &
   
   # Initial kick-off
@@ -993,7 +1445,13 @@ main() {
   if (( task_count > 0 )); then
     log "${BLUE}[Main]${NC} Found pending tasks, starting executor..."
     sleep 2
-    executor &
+    if check_approval_gate && check_review_gate; then
+      if [[ "$GROW_MODE" == "pair" ]]; then
+        executor   # Foreground — interactive session
+      else
+        executor &
+      fi
+    fi
   else
     # Empty plan: populate all tasks from vision in one shot
     log "${BLUE}[Main]${NC} Empty plan, populating initial tasks from vision..."
@@ -1002,13 +1460,29 @@ main() {
     wait $! 2>/dev/null || true
     # Chain into executor now that plan is populated
     if grep -q '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null && [[ ! -d "$LOCK_DIR/running_Executor" ]]; then
-      executor &
+      if check_approval_gate && check_review_gate; then
+        if [[ "$GROW_MODE" == "pair" ]]; then
+          executor   # Foreground — interactive session
+        else
+          executor &
+        fi
+      fi
     fi
   fi
-  
+
+  if [[ "$GROW_MODE" == "pair" ]]; then
+    local final_remaining
+    final_remaining=$(grep -c '\- \[ \]' "$WORK_DIR/PLAN.md" 2>/dev/null) || final_remaining=0
+    if (( final_remaining > 0 )); then
+      echo ""
+      log "${GREEN}[Main]${NC} $final_remaining tasks remaining. Watchers still active."
+      log "${GREEN}[Main]${NC} Run './grow.sh executor' to resume, or Ctrl+C to stop."
+    fi
+  fi
+
   log "${GREEN}[Main]${NC} All watchers running. Touch DONE.md to stop."
   log "${GREEN}[Main]${NC} Press Ctrl+C to shutdown manually."
-  
+
   # Wait for all background jobs
   wait
 }
@@ -1050,6 +1524,43 @@ case "${1:-start}" in
     echo ""
     echo "=== PLAN (completed) ==="
     grep '\- \[x\]' "$WORK_DIR/PLAN.md" 2>/dev/null | tail -10 || echo "(none)"
+    echo ""
+    echo "=== CI STATUS ==="
+    if [[ -f "$LOCK_DIR/ci.log" ]]; then
+      tail -3 "$LOCK_DIR/ci.log"
+    else
+      echo "(no CI runs yet)"
+    fi
+    echo ""
+    echo "=== GROW MODE ==="
+    echo "Mode: $GROW_MODE"
+    echo "CI: $ENABLE_CI | Gate: $ENABLE_APPROVAL_GATE | ReviewGate: $ENABLE_REVIEW_GATE | TDD: $ENABLE_TDD"
+    echo ""
+    echo "=== APPROVAL GATE ==="
+    if [[ "$ENABLE_APPROVAL_GATE" == "true" ]]; then
+      if [[ -f "$APPROVAL_SIGNAL" ]]; then
+        echo "Status: APPROVED (pending consumption)"
+      else
+        echo "Status: WAITING (touch .plan-approved to approve)"
+      fi
+    else
+      echo "Status: DISABLED"
+    fi
+    echo ""
+    echo "=== REVIEW GATE ==="
+    if [[ "$ENABLE_REVIEW_GATE" == "true" ]]; then
+      if [[ -f "$VISION_REVIEW_SIGNAL" ]]; then
+        if [[ -f "$REVIEW_ACK_SIGNAL" ]]; then
+          echo "Status: ACKNOWLEDGED (pending consumption)"
+        else
+          echo "Status: PENDING (touch .vision-reviewed to acknowledge)"
+        fi
+      else
+        echo "Status: CLEAR (no pending review)"
+      fi
+    else
+      echo "Status: DISABLED"
+    fi
     echo ""
     echo "=== RECENT LOG ==="
     tail -20 "$LOG_FILE" 2>/dev/null || echo "(empty)"
