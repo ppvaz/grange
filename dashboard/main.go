@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -68,16 +70,55 @@ type LogEntry struct {
 	Raw     string `json:"raw"`
 }
 
+type CIInfo struct {
+	Enabled    bool   `json:"enabled"`
+	LastResult string `json:"lastResult"` // "pass", "fail", "unknown"
+	LastRun    string `json:"lastRun"`
+}
+
+type GateInfo struct {
+	Enabled bool   `json:"enabled"`
+	Status  string `json:"status"` // "disabled", "waiting", "approved"
+}
+
+type ReviewGateInfo struct {
+	Enabled bool   `json:"enabled"`
+	Status  string `json:"status"` // "disabled", "pending", "acknowledged"
+}
+
+type HealthInfo struct {
+	AgentCount   int    `json:"agentCount"`
+	MaxAgents    int    `json:"maxAgents"`
+	TimeoutCount int    `json:"timeoutCount"`
+	CommitCount  int    `json:"commitCount"`
+	SignalCount  int    `json:"signalCount"`
+	VerifyCycles int    `json:"verifyCycles"`
+	VisionHash   string `json:"visionHash"`
+}
+
+type ActionResponse struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
 type DashboardState struct {
-	WorkDir   string              `json:"workDir"`
-	GrangeDir string              `json:"grangeDir"`
-	Agents    []AgentInfo         `json:"agents"`
-	Plan      PlanInfo            `json:"plan"`
-	Files     map[string]FileInfo `json:"files"`
-	Pipeline  PipelineInfo        `json:"pipeline"`
-	Specs     SpecsInfo           `json:"specs"`
-	Log       []LogEntry          `json:"log"`
-	Done      bool                `json:"done"`
+	WorkDir    string              `json:"workDir"`
+	GrangeDir  string              `json:"grangeDir"`
+	Agents     []AgentInfo         `json:"agents"`
+	Plan       PlanInfo            `json:"plan"`
+	Files      map[string]FileInfo `json:"files"`
+	Pipeline   PipelineInfo        `json:"pipeline"`
+	Specs      SpecsInfo           `json:"specs"`
+	Log        []LogEntry          `json:"log"`
+	Done       bool                `json:"done"`
+	CI         CIInfo              `json:"ci"`
+	Gate       GateInfo            `json:"gate"`
+	ReviewGate ReviewGateInfo      `json:"reviewGate"`
+	Mode       string              `json:"mode"`
+	Health     HealthInfo          `json:"health"`
+	Config     map[string]string   `json:"config"`
+	Running    bool                `json:"running"`
 }
 
 // Multi-project types
@@ -128,7 +169,42 @@ var (
 	ansiRe    = regexp.MustCompile(`\033\[[0-9;]*m`)
 )
 
-var agentNames = []string{"Executor", "Planner", "Critic", "Gap", "Oracle", "Visionary"}
+var agentNames = []string{"Executor", "Planner", "Gap", "Oracle", "Visionary"}
+
+// Valid agent CLI names for run-agent endpoint
+var validAgentCLINames = map[string]bool{
+	"executor": true, "planner": true, "gap": true, "oracle": true, "visionary": true,
+}
+
+// Process tracking for grow.sh
+var (
+	growCmd *exec.Cmd
+	mu      sync.Mutex
+	planMu  sync.Mutex
+)
+
+// Rate limiter
+var (
+	rateMu      sync.Mutex
+	rateLimits  = make(map[string]time.Time)
+)
+
+// Config defaults for feature flags
+var configDefaults = map[string]string{
+	"GROW_MODE":             "auto",
+	"ENABLE_CI":             "auto",
+	"ENABLE_APPROVAL_GATE":  "false",
+	"ENABLE_REVIEW_GATE":    "false",
+	"ENABLE_TDD":            "true",
+	"MAX_FILE_LINES":        "300",
+	"REFACTOR_INTERVAL":     "5",
+	"PAIR_STYLE":            "interactive",
+	"PAIR_TIMEOUT":          "3600",
+	"MAX_AGENTS":            "2",
+	"MIN_INTERVAL":          "30",
+	"DEBOUNCE_INTERVAL":     "60",
+	"SMART_AGENTS":          "Oracle,Visionary",
+}
 
 var stageIDs = []string{"0a", "0b", "1a", "1b", "2a", "2b"}
 var stageNames = []string{"Lenses", "Synthesis", "Extraction", "Prompts", "Build", "Verify"}
@@ -153,9 +229,203 @@ var readableFiles = map[string]string{
 	"done":     "DONE.md",
 	"plan":     "PLAN.md",
 	"log":      "LOG.md",
+	"ci":       ".locks/ci.log",
 }
 
 // --- Filesystem readers (parameterized by dir) ---
+
+func readCIStatus(dir string) CIInfo {
+	ci := CIInfo{LastResult: "unknown"}
+
+	// Check if ci.sh exists
+	ciScript := filepath.Join(dir, "ci.sh")
+	if _, err := os.Stat(ciScript); err != nil {
+		return ci // ci.sh doesn't exist
+	}
+	ci.Enabled = true
+
+	// Read last line of ci.log for result
+	ciLog := filepath.Join(dir, ".locks", "ci.log")
+	data, err := os.ReadFile(ciLog)
+	if err != nil {
+		return ci
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "PASS") {
+			ci.LastResult = "pass"
+			ci.LastRun = strings.TrimPrefix(line, "PASS ")
+			break
+		} else if strings.HasPrefix(line, "FAIL") {
+			ci.LastResult = "fail"
+			ci.LastRun = strings.TrimPrefix(line, "FAIL ")
+			break
+		}
+	}
+	return ci
+}
+
+func readGateStatus(dir string) GateInfo {
+	gate := GateInfo{Status: "disabled"}
+
+	// Check .env for ENABLE_APPROVAL_GATE=true
+	envPath := filepath.Join(dir, ".env")
+	data, err := os.ReadFile(envPath)
+	if err == nil {
+		kv := parseKeyValue(string(data))
+		if v, ok := kv["ENABLE_APPROVAL_GATE"]; ok && v == "true" {
+			gate.Enabled = true
+			gate.Status = "waiting"
+		}
+	}
+
+	if !gate.Enabled {
+		return gate
+	}
+
+	// Check for .plan-approved signal
+	approvalFile := filepath.Join(dir, ".plan-approved")
+	if _, err := os.Stat(approvalFile); err == nil {
+		gate.Status = "approved"
+	}
+	return gate
+}
+
+func readReviewGateStatus(dir string) ReviewGateInfo {
+	rg := ReviewGateInfo{Status: "disabled"}
+
+	// Check .env for ENABLE_REVIEW_GATE=true or GROW_MODE=pair
+	envPath := filepath.Join(dir, ".env")
+	data, err := os.ReadFile(envPath)
+	if err == nil {
+		kv := parseKeyValue(string(data))
+		if v, ok := kv["ENABLE_REVIEW_GATE"]; ok && v == "true" {
+			rg.Enabled = true
+		}
+		if v, ok := kv["GROW_MODE"]; ok && v == "pair" {
+			rg.Enabled = true
+		}
+	}
+
+	if !rg.Enabled {
+		return rg
+	}
+
+	rg.Status = "clear"
+
+	// Check for .vision-review-pending signal
+	pendingFile := filepath.Join(dir, ".vision-review-pending")
+	if _, err := os.Stat(pendingFile); err == nil {
+		rg.Status = "pending"
+		// Check for .vision-reviewed acknowledgement
+		ackFile := filepath.Join(dir, ".vision-reviewed")
+		if _, err := os.Stat(ackFile); err == nil {
+			rg.Status = "acknowledged"
+		}
+	}
+	return rg
+}
+
+func readGrowMode(dir string) string {
+	envPath := filepath.Join(dir, ".env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return "auto"
+	}
+	kv := parseKeyValue(string(data))
+	if v, ok := kv["GROW_MODE"]; ok && (v == "pair" || v == "sleep" || v == "auto") {
+		return v
+	}
+	return "auto"
+}
+
+func readHealth(dir string) HealthInfo {
+	lockDir := filepath.Join(dir, ".locks")
+	h := HealthInfo{MaxAgents: 2}
+
+	readInt := func(name string) int {
+		data, err := os.ReadFile(filepath.Join(lockDir, name))
+		if err != nil {
+			return 0
+		}
+		n, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+		return n
+	}
+
+	h.AgentCount = readInt("agent_count")
+	h.TimeoutCount = readInt("timeout_count")
+	h.CommitCount = readInt("commit_count")
+	h.SignalCount = readInt("signal_count")
+	h.VerifyCycles = readInt("verify_cycles")
+
+	// Read MAX_AGENTS from config if available
+	envPath := filepath.Join(dir, ".env")
+	if data, err := os.ReadFile(envPath); err == nil {
+		kv := parseKeyValue(string(data))
+		if v, ok := kv["MAX_AGENTS"]; ok {
+			if n, err := strconv.Atoi(v); err == nil {
+				h.MaxAgents = n
+			}
+		}
+	}
+
+	// Count active running agents from running_* dirs
+	entries, err := os.ReadDir(lockDir)
+	if err == nil {
+		count := 0
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "running_") {
+				count++
+			}
+		}
+		h.AgentCount = count
+	}
+
+	// Vision validated hash
+	data, err := os.ReadFile(filepath.Join(lockDir, "vision_validated_hash"))
+	if err == nil {
+		h.VisionHash = strings.TrimSpace(string(data))
+	}
+
+	return h
+}
+
+func readConfig(dir string) map[string]string {
+	config := make(map[string]string)
+	for k, v := range configDefaults {
+		config[k] = v
+	}
+
+	envPath := filepath.Join(dir, ".env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return config
+	}
+
+	kv := parseKeyValue(string(data))
+	for k := range configDefaults {
+		if v, ok := kv[k]; ok {
+			config[k] = v
+		}
+	}
+	return config
+}
+
+func isRunning(dir string) bool {
+	lockDir := filepath.Join(dir, ".locks")
+	entries, err := os.ReadDir(lockDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "running_") {
+			return true
+		}
+	}
+	return false
+}
 
 func readAgents(dir string) []AgentInfo {
 	lockDir := filepath.Join(dir, ".locks")
@@ -620,15 +890,22 @@ func resolveDir(r *http.Request) string {
 func handleState(w http.ResponseWriter, r *http.Request) {
 	dir := resolveDir(r)
 	state := DashboardState{
-		WorkDir:   dir,
-		GrangeDir: grangeDir,
-		Agents:    readAgents(dir),
-		Plan:      readPlan(dir),
-		Files:     readFiles(dir),
-		Pipeline:  readPipeline(dir),
-		Specs:     readSpecs(dir),
-		Log:       readLog(dir),
-		Done:      checkDone(dir),
+		WorkDir:    dir,
+		GrangeDir:  grangeDir,
+		Agents:     readAgents(dir),
+		Plan:       readPlan(dir),
+		Files:      readFiles(dir),
+		Pipeline:   readPipeline(dir),
+		Specs:      readSpecs(dir),
+		Log:        readLog(dir),
+		Done:       checkDone(dir),
+		CI:         readCIStatus(dir),
+		Gate:       readGateStatus(dir),
+		ReviewGate: readReviewGateStatus(dir),
+		Mode:       readGrowMode(dir),
+		Health:     readHealth(dir),
+		Config:     readConfig(dir),
+		Running:    isRunning(dir),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -703,6 +980,480 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// --- Action helpers ---
+
+func respondJSON(w http.ResponseWriter, status int, resp ActionResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func requirePOST(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			respondJSON(w, http.StatusMethodNotAllowed, ActionResponse{Error: "POST required"})
+			return
+		}
+		handler(w, r)
+	}
+}
+
+func rateLimit(action string, cooldown time.Duration) bool {
+	rateMu.Lock()
+	defer rateMu.Unlock()
+	if last, ok := rateLimits[action]; ok {
+		if time.Since(last) < cooldown {
+			return false
+		}
+	}
+	rateLimits[action] = time.Now()
+	return true
+}
+
+// --- Phase 1: Gate action handlers ---
+
+func handleActionApprove(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	// Validate gate is enabled
+	gate := readGateStatus(dir)
+	if !gate.Enabled {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Approval gate is not enabled"})
+		return
+	}
+	if gate.Status != "waiting" {
+		respondJSON(w, http.StatusConflict, ActionResponse{Error: "Gate is not in waiting state"})
+		return
+	}
+
+	if !rateLimit("approve", 2*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".plan-approved"), []byte(""), 0644); err != nil {
+		respondJSON(w, http.StatusInternalServerError, ActionResponse{Error: "Failed to write approval file"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "Plan approved"})
+}
+
+func handleActionReviewAck(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	// Validate review gate is enabled
+	rg := readReviewGateStatus(dir)
+	if !rg.Enabled {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Review gate is not enabled"})
+		return
+	}
+	if rg.Status != "pending" {
+		respondJSON(w, http.StatusConflict, ActionResponse{Error: "No pending review to acknowledge"})
+		return
+	}
+
+	if !rateLimit("review-ack", 2*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".vision-reviewed"), []byte(""), 0644); err != nil {
+		respondJSON(w, http.StatusInternalServerError, ActionResponse{Error: "Failed to write review acknowledgement"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "Review acknowledged"})
+}
+
+// --- Phase 2: Agent lifecycle handlers ---
+
+func resolveGrowPath(dir string) (string, error) {
+	growPath := filepath.Join(dir, "grow.sh")
+	// Verify grow.sh exists (symlink or regular file)
+	if _, err := os.Lstat(growPath); err != nil {
+		return "", fmt.Errorf("grow.sh not found in %s", dir)
+	}
+	return growPath, nil
+}
+
+func handleActionStart(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	if isRunning(dir) {
+		respondJSON(w, http.StatusConflict, ActionResponse{Error: "Agents are already running"})
+		return
+	}
+
+	if !rateLimit("start", 5*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	growPath, err := resolveGrowPath(dir)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: err.Error()})
+		return
+	}
+
+	cmd := exec.Command("bash", growPath, "start")
+	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		respondJSON(w, http.StatusInternalServerError, ActionResponse{Error: "Failed to start grow.sh: " + err.Error()})
+		return
+	}
+
+	mu.Lock()
+	growCmd = cmd
+	mu.Unlock()
+
+	// Reap the process in background to avoid zombies
+	go cmd.Wait()
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "Agents started"})
+}
+
+func handleActionStop(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	if !rateLimit("stop", 5*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	mu.Lock()
+	cmd := growCmd
+	mu.Unlock()
+
+	stopped := false
+
+	// Try stored command first
+	if cmd != nil && cmd.Process != nil {
+		pgid, err := syscall.Getpgid(cmd.Process.Pid)
+		if err == nil {
+			syscall.Kill(-pgid, syscall.SIGTERM)
+			stopped = true
+		}
+	}
+
+	// Also try pgrep fallback for externally-started grow.sh
+	if !stopped {
+		out, err := exec.Command("pgrep", "-f", "grow.sh start").Output()
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+					syscall.Kill(pid, syscall.SIGTERM)
+					stopped = true
+				}
+			}
+		}
+	}
+
+	if !stopped {
+		respondJSON(w, http.StatusConflict, ActionResponse{Error: "No running agents found"})
+		return
+	}
+
+	// Clean up running markers after a brief delay
+	go func() {
+		time.Sleep(3 * time.Second)
+		lockDir := filepath.Join(dir, ".locks")
+		entries, err := os.ReadDir(lockDir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "running_") {
+				os.RemoveAll(filepath.Join(lockDir, e.Name()))
+			}
+		}
+		mu.Lock()
+		growCmd = nil
+		mu.Unlock()
+	}()
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "Stop signal sent"})
+}
+
+func handleActionRunAgent(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+	agent := r.URL.Query().Get("agent")
+
+	if !validAgentCLINames[agent] {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Invalid agent name. Must be one of: executor, planner, gap, oracle, visionary"})
+		return
+	}
+
+	if !rateLimit("run-agent-"+agent, 5*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	growPath, err := resolveGrowPath(dir)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: err.Error()})
+		return
+	}
+
+	cmd := exec.Command("bash", growPath, agent)
+	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		respondJSON(w, http.StatusInternalServerError, ActionResponse{Error: "Failed to run agent: " + err.Error()})
+		return
+	}
+
+	go cmd.Wait()
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: agent + " agent started"})
+}
+
+// --- Phase 3: Plan management handlers ---
+
+func handleActionPlanAdd(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	var body struct {
+		Task string `json:"task"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Invalid request body"})
+		return
+	}
+
+	task := strings.TrimSpace(body.Task)
+	task = strings.ReplaceAll(task, "\n", " ")
+	task = strings.ReplaceAll(task, "\r", " ")
+	if task == "" {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Task text is required"})
+		return
+	}
+	if len(task) > 500 {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Task text exceeds 500 character limit"})
+		return
+	}
+
+	if !rateLimit("plan-add", 1*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	planPath := filepath.Join(dir, "PLAN.md")
+
+	planMu.Lock()
+	defer planMu.Unlock()
+
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		// PLAN.md doesn't exist yet — create it
+		data = []byte{}
+	}
+
+	content := string(data)
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += "- [ ] " + task + "\n"
+
+	if err := os.WriteFile(planPath, []byte(content), 0644); err != nil {
+		respondJSON(w, http.StatusInternalServerError, ActionResponse{Error: "Failed to write PLAN.md"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "Task added"})
+}
+
+func handleActionPlanToggle(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	var body struct {
+		Index int `json:"index"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Invalid request body"})
+		return
+	}
+
+	if !rateLimit("plan-toggle", 1*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	planPath := filepath.Join(dir, "PLAN.md")
+
+	planMu.Lock()
+	defer planMu.Unlock()
+
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		respondJSON(w, http.StatusNotFound, ActionResponse{Error: "PLAN.md not found"})
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	taskIdx := 0
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- [x]") || strings.HasPrefix(trimmed, "- [X]") || strings.HasPrefix(trimmed, "- [ ]") {
+			if taskIdx == body.Index {
+				// Toggle
+				if strings.HasPrefix(trimmed, "- [ ]") {
+					lines[i] = strings.Replace(line, "- [ ]", "- [x]", 1)
+				} else {
+					lines[i] = regexp.MustCompile(`- \[[xX]\]`).ReplaceAllString(line, "- [ ]")
+				}
+				found = true
+				break
+			}
+			taskIdx++
+		}
+	}
+
+	if !found {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Task index out of range"})
+		return
+	}
+
+	if err := os.WriteFile(planPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		respondJSON(w, http.StatusInternalServerError, ActionResponse{Error: "Failed to write PLAN.md"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "Task toggled"})
+}
+
+func handleActionPlanRemove(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	var body struct {
+		Index  int    `json:"index"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Invalid request body"})
+		return
+	}
+
+	reason := strings.TrimSpace(body.Reason)
+	if reason == "" {
+		reason = "cut from dashboard"
+	}
+
+	if !rateLimit("plan-remove", 1*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "Please wait before retrying"})
+		return
+	}
+
+	planPath := filepath.Join(dir, "PLAN.md")
+	cutsPath := filepath.Join(dir, "CUTS.md")
+
+	planMu.Lock()
+	defer planMu.Unlock()
+
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		respondJSON(w, http.StatusNotFound, ActionResponse{Error: "PLAN.md not found"})
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	taskIdx := 0
+	removedLine := -1
+	var taskText string
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- [x]") || strings.HasPrefix(trimmed, "- [X]") || strings.HasPrefix(trimmed, "- [ ]") {
+			if taskIdx == body.Index {
+				taskText = regexp.MustCompile(`^- \[[ xX]\]\s*`).ReplaceAllString(trimmed, "")
+				removedLine = i
+				break
+			}
+			taskIdx++
+		}
+	}
+
+	if removedLine < 0 {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "Task index out of range"})
+		return
+	}
+
+	// Remove line from PLAN.md
+	newLines := append(lines[:removedLine], lines[removedLine+1:]...)
+	if err := os.WriteFile(planPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+		respondJSON(w, http.StatusInternalServerError, ActionResponse{Error: "Failed to write PLAN.md"})
+		return
+	}
+
+	// Append to CUTS.md
+	cutEntry := fmt.Sprintf("- %s — cut: %s (%s)\n", taskText, reason, time.Now().Format("2006-01-02"))
+	cutsData, _ := os.ReadFile(cutsPath)
+	cutsContent := string(cutsData)
+	if len(cutsContent) > 0 && !strings.HasSuffix(cutsContent, "\n") {
+		cutsContent += "\n"
+	}
+	cutsContent += cutEntry
+	os.WriteFile(cutsPath, []byte(cutsContent), 0644)
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "Task cut: " + taskText})
+}
+
+// --- Phase 4: CI trigger handler ---
+
+func handleActionCIRun(w http.ResponseWriter, r *http.Request) {
+	dir := resolveDir(r)
+
+	ciPath := filepath.Join(dir, "ci.sh")
+	info, err := os.Stat(ciPath)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "ci.sh not found"})
+		return
+	}
+	if info.Mode()&0111 == 0 {
+		respondJSON(w, http.StatusBadRequest, ActionResponse{Error: "ci.sh is not executable"})
+		return
+	}
+
+	if !rateLimit("ci-run", 10*time.Second) {
+		respondJSON(w, http.StatusTooManyRequests, ActionResponse{Error: "CI recently triggered, please wait"})
+		return
+	}
+
+	// Run CI in background
+	go func() {
+		lockDir := filepath.Join(dir, ".locks")
+		os.MkdirAll(lockDir, 0755)
+		logPath := filepath.Join(lockDir, "ci.log")
+
+		logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return
+		}
+		defer logFile.Close()
+
+		cmd := exec.Command("bash", ciPath)
+		cmd.Dir = dir
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+
+		ts := time.Now().Format("2006-01-02 15:04:05")
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(logFile, "FAIL %s\n", ts)
+		} else {
+			fmt.Fprintf(logFile, "PASS %s\n", ts)
+		}
+	}()
+
+	respondJSON(w, http.StatusOK, ActionResponse{OK: true, Message: "CI run started"})
+}
+
 func init() {
 	// Add agent log keys to readable files
 	for _, name := range agentNames {
@@ -764,6 +1515,17 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/state", handleState)
 	mux.HandleFunc("/api/file/", handleFile)
+
+	// Action endpoints
+	mux.HandleFunc("/api/action/approve", requirePOST(handleActionApprove))
+	mux.HandleFunc("/api/action/review-ack", requirePOST(handleActionReviewAck))
+	mux.HandleFunc("/api/action/start", requirePOST(handleActionStart))
+	mux.HandleFunc("/api/action/stop", requirePOST(handleActionStop))
+	mux.HandleFunc("/api/action/run-agent", requirePOST(handleActionRunAgent))
+	mux.HandleFunc("/api/action/plan/add", requirePOST(handleActionPlanAdd))
+	mux.HandleFunc("/api/action/plan/toggle", requirePOST(handleActionPlanToggle))
+	mux.HandleFunc("/api/action/plan/remove", requirePOST(handleActionPlanRemove))
+	mux.HandleFunc("/api/action/ci/run", requirePOST(handleActionCIRun))
 
 	if allMode {
 		mux.HandleFunc("/api/projects", handleProjects)

@@ -13,6 +13,13 @@
       <span class="logo">🌾 GRANGE</span>
       <span class="work-dir" id="workDir"></span>
     </div>
+    <div class="header-center">
+      <div class="health-bar" id="healthBar"></div>
+      <div class="header-actions">
+        <button class="btn btn-start" id="btnStart" disabled>Start</button>
+        <button class="btn btn-stop" id="btnStop" disabled>Stop</button>
+      </div>
+    </div>
     <div class="header-right">
       <span class="status-dot" id="statusDot"></span>
       <span class="status-label" id="statusLabel">Connecting</span>
@@ -38,6 +45,30 @@
       <section class="card" id="signalsCard">
         <h2>Signals</h2>
         <div class="card-body" id="signalsBody"></div>
+      </section>
+    </div>
+
+    <div class="grid-2">
+      <section class="card" id="ciCard">
+        <h2>CI</h2>
+        <div class="card-body" id="ciBody"></div>
+      </section>
+
+      <section class="card" id="gateCard">
+        <h2>Approval Gate</h2>
+        <div class="card-body" id="gateBody"></div>
+      </section>
+    </div>
+
+    <div class="grid-2">
+      <section class="card" id="reviewGateCard">
+        <h2>Review Gate</h2>
+        <div class="card-body" id="reviewGateBody"></div>
+      </section>
+
+      <section class="card" id="modeCard">
+        <h2>Grow Mode</h2>
+        <div class="card-body" id="modeBody"></div>
       </section>
     </div>
 
@@ -69,6 +100,7 @@
     </div>
   </div>
 
+  <div class="toast-container" id="toastContainer"></div>
   <script src="app.js"></script>
 </body>
 </html>

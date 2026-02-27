@@ -91,6 +91,17 @@ header.done {
   max-width: 500px;
 }
 
+.header-center {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -318,20 +329,6 @@ main {
   overflow-y: auto;
 }
 
-.task-item {
-  font-size: 0.8rem;
-  padding: 4px 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  line-height: 1.4;
-}
-
-.task-check {
-  flex-shrink: 0;
-  font-size: 0.85rem;
-}
-
 .task-item.completed {
   color: var(--text-dim);
   text-decoration: line-through;
@@ -390,6 +387,97 @@ main {
   color: var(--text-dim);
   font-size: 0.75rem;
   font-style: italic;
+}
+
+/* --- CI Status --- */
+
+.ci-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.ci-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.ci-pass { color: var(--green); }
+.ci-fail { color: var(--red); }
+.ci-unknown { color: var(--text-dim); }
+.ci-disabled { color: var(--text-dim); font-style: italic; }
+
+.ci-time {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.ci-log-btn {
+  font-size: 0.75rem;
+}
+
+/* --- Approval Gate --- */
+
+.gate-status {
+  font-size: 0.85rem;
+}
+
+.gate-icon {
+  font-size: 1rem;
+}
+
+.gate-waiting {
+  color: var(--amber);
+}
+
+.gate-waiting .gate-icon {
+  animation: pulse 2s ease-in-out infinite;
+  display: inline-block;
+}
+
+.gate-approved {
+  color: var(--green);
+}
+
+.gate-disabled {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.gate-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.gate-hint code {
+  font-family: var(--font-mono);
+  background: var(--surface-alt);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+}
+
+/* --- Mode --- */
+
+.mode-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mode-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.mode-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 /* --- Pipeline --- */
@@ -744,6 +832,279 @@ main {
   background: var(--border-hover);
 }
 
+/* --- Buttons --- */
+
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--border);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-start {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.btn-start:hover:not(:disabled) {
+  background: var(--green-dim);
+  border-color: var(--green);
+}
+
+.btn-stop {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: var(--red-dim);
+  border-color: var(--red);
+}
+
+.btn-approve {
+  border-color: var(--amber);
+  color: var(--amber);
+  margin-top: 8px;
+}
+
+.btn-approve:hover:not(:disabled) {
+  background: var(--amber-dim);
+  border-color: var(--amber);
+}
+
+.btn-review-ack {
+  border-color: var(--blue);
+  color: var(--blue);
+  margin-top: 8px;
+}
+
+.btn-review-ack:hover:not(:disabled) {
+  background: var(--blue-dim);
+  border-color: var(--blue);
+}
+
+.btn-ci-run {
+  border-color: var(--green);
+  color: var(--green);
+  margin-top: 8px;
+}
+
+.btn-ci-run:hover:not(:disabled) {
+  background: var(--green-dim);
+  border-color: var(--green);
+}
+
+.btn-agent-run {
+  padding: 3px 8px;
+  font-size: 0.65rem;
+  border-color: var(--green);
+  color: var(--green);
+  margin-left: auto;
+}
+
+.btn-agent-run:hover:not(:disabled) {
+  background: var(--green-dim);
+}
+
+/* --- Health bar --- */
+
+.health-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.health-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.health-value {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.health-value.amber {
+  color: var(--amber);
+}
+
+/* --- Toast --- */
+
+.toast-container {
+  position: fixed;
+  top: 60px;
+  right: 20px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 500;
+  animation: slideIn 200ms ease, fadeOut 300ms ease 2.7s forwards;
+  max-width: 320px;
+  word-break: break-word;
+}
+
+.toast-success {
+  background: var(--green-dim);
+  color: var(--green);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.toast-error {
+  background: var(--red-dim);
+  color: var(--red);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+@keyframes slideIn {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* --- Plan add --- */
+
+.plan-add {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.plan-add input {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-family: var(--font);
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.plan-add input:focus {
+  border-color: var(--green);
+}
+
+.plan-add input::placeholder {
+  color: var(--text-dim);
+}
+
+.plan-add .btn {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+/* --- Interactive task items --- */
+
+.task-item {
+  font-size: 0.8rem;
+  padding: 4px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.4;
+  position: relative;
+}
+
+.task-check-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: color var(--transition);
+}
+
+.task-check-btn:hover {
+  color: var(--green);
+}
+
+.task-item.completed .task-check-btn {
+  color: var(--text-dim);
+}
+
+.task-cut-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0 4px;
+  color: var(--text-dim);
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition), color var(--transition);
+}
+
+.task-item:hover .task-cut-btn {
+  opacity: 1;
+}
+
+.task-cut-btn:hover {
+  color: var(--red);
+}
+
+/* --- Config display --- */
+
+.config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.config-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+}
+
+.config-key {
+  color: var(--text-dim);
+}
+
+.config-val {
+  color: var(--text-muted);
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {
@@ -756,6 +1117,10 @@ main {
   }
 
   .work-dir {
+    display: none;
+  }
+
+  .health-bar {
     display: none;
   }
 
