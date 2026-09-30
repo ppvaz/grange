@@ -200,10 +200,12 @@ var configDefaults = map[string]string{
 	"REFACTOR_INTERVAL":     "5",
 	"PAIR_STYLE":            "interactive",
 	"PAIR_TIMEOUT":          "3600",
-	"MAX_AGENTS":            "2",
-	"MIN_INTERVAL":          "30",
-	"DEBOUNCE_INTERVAL":     "60",
+	"GRANGE_SMART":          "claude",
+	"GRANGE_CHEAP":          "claude",
 	"SMART_AGENTS":          "Oracle,Visionary",
+	"AGENT_TIMEOUT":         "600",
+	"ORACLE_TIMEOUT":        "1800",
+	"MAX_PENDING_TASKS":     "5",
 }
 
 var stageIDs = []string{"0a", "0b", "1a", "1b", "2a", "2b"}
@@ -1140,9 +1142,10 @@ func handleActionStop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Also try pgrep fallback for externally-started grow.sh
+	// Also try pgrep fallback for externally-started grow.sh, which execs
+	// the Go binary (bin/grange grow start)
 	if !stopped {
-		out, err := exec.Command("pgrep", "-f", "grow.sh start").Output()
+		out, err := exec.Command("pgrep", "-f", "grange grow start|grow.sh start").Output()
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
