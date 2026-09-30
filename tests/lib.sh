@@ -1,6 +1,10 @@
 # tests/lib.sh - Helpers loaded into every test by tests/run.sh
 
 GRANGE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# Stub body that plays each grange role (see tests/fake_agent.sh)
+FAKE_AGENT="source $GRANGE/tests/fake_agent.sh"
+export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
+export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 
 # Creates a throwaway grange project at $PROJECT and cds into it. Every agent
 # CLI (claude, codex, agy, opencode) on PATH is a stub that appends its PID to
@@ -33,7 +37,11 @@ EOF
     [[ -x "$dir/claude-cheap" ]] || path+=":$dir"
   done
   export PATH="$path"
-  unset CLAUDE_SMART_CMD CLAUDE_CHEAP_CMD GROW_MODE SMART_AGENTS
+  unset GRANGE_SMART GRANGE_CHEAP GROW_MODE SMART_AGENTS ENABLE_APPROVAL_GATE ENABLE_REVIEW_GATE ENABLE_CI
+  local var
+  for var in $(compgen -e | grep '^GRANGE_AGENT_'); do
+    unset "$var"
+  done
 
   cd "$PROJECT"
   for f in grow.sh reap.sh digest.sh distill.sh visions; do
@@ -42,9 +50,10 @@ EOF
   printf '# Vision\n\n## Done When\n- [ ] hello.txt exists\n' > VISION.md
   printf -- '- [ ] Write hello.txt\n' > PLAN.md
   : > .env  # keeps grow.sh from falling back to grange's own .env
+  printf '.locks/\nLOG.md\n' > .gitignore
   git init -q
   git add -A
-  git -c user.name=test -c user.email=test@example.com commit -qm init
+  git commit --quiet --message init
 }
 
 cleanup_project() {
@@ -79,4 +88,13 @@ grange() {
 # Stub body that writes $1 to the answer file named in a `grange agent run` prompt
 answer_with() {
   printf 'printf %%s %q > "$(printf %%s "$*" | sed -nE %q)"' "$1" 's/.*to the file (.+)\. Don.t create.*/\1/p'
+}
+
+# Runs a command attached to a pseudo-terminal, for pair mode
+in_pty() {
+  if script --version 2>/dev/null | grep -q util-linux; then
+    script -qec "$*" /dev/null
+  else
+    script -q /dev/null "$@"
+  fi
 }

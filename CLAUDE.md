@@ -7,7 +7,7 @@ Autonomous AI development toolkit using agricultural metaphors. Reap knowledge f
 **Two-part lifecycle:**
 
 1. **Reap** (`reap.sh`) - 6-stage IKE pipeline extracts implicit knowledge from existing codebases through three lenses (Business Analyst, Product Manager, QA Adversarial). Produces technology-agnostic specs with confidence scores.
-2. **Grow** (`grow.sh`) - Event-driven multi-agent system where 5 agents (Executor, Planner, Gap Finder, Oracle, Visionary) self-organize around a `VISION.md` contract until the Oracle declares it done via `DONE.md`.
+2. **Grow** (`grow.sh`) - A fixed loop where 5 agent roles (Executor, Planner, Gap Finder, Oracle, Visionary) work toward a `VISION.md` contract until the Oracle's verdict says it's done (`DONE.md`). Each role can run on Claude Code, Codex, Antigravity (`agy`) or OpenCode.
 
 **Supporting tools:**
 - `harvest.sh` - Converts IKE extraction prompts into reusable spec files
@@ -17,19 +17,33 @@ Autonomous AI development toolkit using agricultural metaphors. Reap knowledge f
 
 ## Architecture
 
+### Code layout
+
+The orchestrator is a Go binary (`cmd/grange`, stdlib only). `grow.sh` and `digest.sh` are shims that run it through `lib/launch.sh`, which rebuilds `bin/grange` whenever the Go sources are newer, so symlinked projects pick up changes on the next run.
+
+| Package | Owns |
+|---------|------|
+| `internal/agent` | Per-CLI argv (headless/interactive/plan), running agents in their own process group, `Ask` (answers via a file) |
+| `internal/config` | `.env` loading, grow-mode presets, which backend each role uses |
+| `internal/workspace` | PLAN.md tasks, `.locks/` counters and running markers (the dashboard reads these), LOG.md, git |
+| `internal/grow` | The loop, gates, CI, digest, and the agent prompts (`internal/grow/prompts/*.md`, embedded) |
+
 ### Agent System (grow.sh)
 
-| Agent | Role | API Tier |
-|-------|------|----------|
-| **Executor** | Does tasks from PLAN.md, commits results | Cheap (`claude-cheap`) |
-| **Planner** | Adds/cuts tasks, checks alignment with vision | Cheap (`claude-cheap`) |
-| **Gap Finder** | Reviews each commit for vision drift | Cheap (`claude-cheap`) |
-| **Oracle** | Declares vision achieved when all checks pass | Smart (Opus) |
-| **Visionary** | Detects systemic patterns, suggests refinements | Smart (Opus) |
+| Agent | Role | Tier (default) |
+|-------|------|----------------|
+| **Executor** | Does tasks from PLAN.md, commits results | Cheap |
+| **Planner** | Populates the plan, cuts misaligned tasks, adds the next one if the vision isn't covered | Cheap |
+| **Gap Finder** (`Gap`) | Reviews each batch of new commits: drift, file size, tests, security, docs | Cheap |
+| **Oracle** | Verifies the vision; writes a JSON verdict to `.locks/oracle-verdict.json` | Smart |
+| **Visionary** | Detects systemic patterns, appends to VISION_REVIEW.md | Smart |
 
-Event-driven: file watchers (inotifywait/fswatch) trigger agents on changes to PLAN.md, VISION.md, git commits, and signal files. Heartbeat every 10 minutes as safety net.
+The loop (`internal/grow/grow.go`), one step per turn:
+1. Empty plan: the Planner populates it. All tasks checked: the Oracle runs, and its verdict becomes `DONE.md` or `Fix:` tasks.
+2. Otherwise wait for the gates, run the Executor, then CI. New commits: Gap Finder, then Planner (if under `MAX_PENDING_TASKS`).
+3. Observation files grew by 3+ lines (or every `REFACTOR_INTERVAL` commits): Visionary. 10+ undigested lines: digest.
 
-Concurrency: `MAX_AGENTS=2`, mkdir-based atomic locking, rate limiting (`MIN_INTERVAL=30s`), debouncing (`DEBOUNCE_INTERVAL=60s`).
+Three turns in a row without progress (no new commit, no task checked, no fix tasks) stop the loop with an error rather than burning tokens. Agents run one at a time; there are no watchers, locks or heartbeat.
 
 ### IKE Pipeline (reap.sh)
 
@@ -123,8 +137,11 @@ Structure:
 ## Environment
 
 - `.env` holds API keys: `ANTHROPIC_API_KEY` (for smart agents), plus any other provider keys
-- `SMART_AGENTS` env var controls which agents use the smart vs cheap tier (default: `Oracle,Visionary`)
-- `CLAUDE_SMART_CMD` (default `claude`) and `CLAUDE_CHEAP_CMD` (default `claude-cheap`) set each tier's command, e.g. `CLAUDE_CHEAP_CMD="claude --model claude-sonnet-5-5"`. Resolved in `lib/claude-cmd.sh`; `grow.sh start`, `digest.sh` and `distill.sh` refuse to run if the command isn't an executable on PATH
+- `GRANGE_SMART` / `GRANGE_CHEAP` pick each tier's backend as `backend[:model]`: `claude`, `codex`, `agy` or `opencode`, e.g. `GRANGE_CHEAP=codex:gpt-5.5`, `GRANGE_SMART=claude:claude-opus-5-5`, `opencode:anthropic/claude-sonnet-5-5` (default: `claude` for both)
+- `SMART_AGENTS` lists roles on the smart tier (default: `Oracle,Visionary`); `GRANGE_AGENT_<ROLE>` overrides one role (`EXECUTOR`, `PLANNER`, `GAP`, `ORACLE`, `VISIONARY`, `DIGEST`, `DISTILL`)
+- Headless agents run with each CLI's auto-approve flag (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, `--auto`): they're unattended and need a shell anyway. Only point grange at code you'd let an agent loose on.
+- `grow.sh start` checks every backend is on PATH before doing anything; `lib/launch.sh agent check` shows the role-to-backend mapping
+- Values already in the environment win over `.env`
 
 ## Agile Vibe Code Configuration
 
@@ -181,11 +198,10 @@ tests/run.sh agent_test.sh          # one end-to-end file
 
 ## Development Notes
 
-- All bash scripts use `set -euo pipefail`
-- Scripts run under `/bin/bash` (3.2 on macOS) and wrap agents in `timeout`, so aliases and functions from the user's interactive shell (e.g. a zsh `claude-cheap`) are invisible. Anything grange invokes must be an executable on PATH
+- Remaining bash scripts use `set -euo pipefail`
+- Headless agents get their own process group (`internal/agent/exec.go`); a timeout, shutdown or normal exit kills the whole group, so MCP/dev servers an agent started don't outlive it. Interactive (pair) agents share grange's group so their UI owns the terminal; Ctrl+C then goes to the agent, not grange
+- Agent CLIs are found on PATH, so aliases and functions from the user's interactive shell (e.g. a zsh `claude-cheap`, or `codex` aliased with extra flags) are invisible. Grange passes its own flags per backend. `/bin/bash` is 3.2 on macOS; keep the remaining scripts compatible
 - Scripts are symlinked into projects; find grange's own files via `readlink -f "$0"`, not `dirname "$0"`
 - Shutdown uses `stop_descendants` (`lib/procs.sh`), never `kill 0` or process-group sweeps: `timeout` gives every agent its own group, and reap.sh/grow.sh share one, so group kills both orphan agents and kill the parent
-- File watching: `inotifywait` on Linux, `fswatch` on macOS
-- Locking: mkdir-based atomic locks (macOS-compatible, no flock dependency)
 - Dashboard: Go binary at `dashboard/grange-dashboard`, serves on port 3000+
 - Symlink architecture means toolkit updates propagate to all adopted projects automatically

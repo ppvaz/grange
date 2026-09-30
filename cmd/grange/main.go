@@ -17,6 +17,9 @@ import (
 const usage = `Usage: grange <command> [args]
 
 Commands:
+  grow [start|executor|planner|gap|oracle|visionary|status]
+                                      Drive the project toward VISION.md (default: start)
+  digest                              Summarise new observations into HUMAN_DIGEST.md
   agent run [--role R] [--log FILE]   Run stdin as a prompt; print the agent's answer
   agent check [ROLE...]               Show which backend each role uses, and that it's installed`
 
@@ -52,6 +55,10 @@ func run(args []string) error {
 	defer stop()
 
 	switch args[0] {
+	case "grow":
+		return growCmd(ctx, workDir, args[1:])
+	case "digest":
+		return digestCmd(ctx, workDir)
 	case "agent":
 		return agentCmd(ctx, workDir, args[1:])
 	default:

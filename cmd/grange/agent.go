@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/ppvaz/grange/internal/agent"
@@ -39,8 +38,7 @@ func agentCmd(ctx context.Context, workDir string, args []string) error {
 }
 
 // agentRun is how scripts (distill.sh) call a model without knowing which
-// backend is configured: the answer goes through a file, which every backend
-// can write, so no CLI's output format has to be parsed.
+// backend is configured.
 func agentRun(ctx context.Context, workDir string, settings config.Settings, args []string) error {
 	fs := flag.NewFlagSet("agent run", flag.ContinueOnError)
 	role := fs.String("role", "Distill", "role whose backend to use (see GRANGE_AGENT_<ROLE>)")
@@ -56,13 +54,6 @@ func agentRun(ctx context.Context, workDir string, settings config.Settings, arg
 		return fmt.Errorf("agent run: empty prompt on stdin")
 	}
 
-	tmp, err := os.MkdirTemp("", "grange-answer-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmp)
-	answer := filepath.Join(tmp, "answer.md")
-
 	log := io.Discard
 	if *logPath != "" {
 		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -73,27 +64,18 @@ func agentRun(ctx context.Context, workDir string, settings config.Settings, arg
 		log = f
 	}
 
-	spec := settings.SpecFor(*role)
-	err = agent.Exec(ctx, agent.Run{
-		Spec:    spec,
-		Inv:     agent.Invocation{Prompt: string(prompt) + answerInstruction(answer)},
+	answer, err := agent.Ask(ctx, agent.Run{
+		Spec:    settings.SpecFor(*role),
+		Inv:     agent.Invocation{Prompt: string(prompt)},
 		Dir:     workDir,
 		Timeout: settings.AgentTimeout,
 		Log:     log,
 	})
 	if err != nil {
-		return fmt.Errorf("%s: %w", spec, err)
+		return err
 	}
-	out, err := os.ReadFile(answer)
-	if err != nil {
-		return fmt.Errorf("%s finished without writing an answer to %s", spec, answer)
-	}
-	_, err = os.Stdout.Write(out)
+	_, err = os.Stdout.WriteString(answer)
 	return err
-}
-
-func answerInstruction(path string) string {
-	return fmt.Sprintf("\n\nWrite your final answer, and nothing else, to the file %s. Don't create or modify any other file.\n", path)
 }
 
 func agentCheck(settings config.Settings, roles []string) error {
