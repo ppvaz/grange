@@ -169,6 +169,15 @@ Presets that configure multiple variables at once. Individual `ENABLE_*` vars ca
 | `pair` | ON | ON | Always runs | Per `PAIR_STYLE` | Active development |
 | `sleep` | OFF | OFF | Hash-based skip | Non-interactive + `--dangerously-skip-permissions` | Overnight runs |
 
+## Tests
+
+```bash
+tests/run.sh                        # all tests (~5s, runs on the host, no deps)
+tests/run.sh claude_cmd_test.sh     # one file
+```
+
+Each `test_*` function in `tests/*_test.sh` runs in its own bash process. `new_project` (in `tests/lib.sh`) builds a throwaway project whose only `claude` is a stub recording its PID/args, so tests never hit a real model. Drive the real scripts end to end rather than sourcing their internals.
+
 ## Development Notes
 
 - All bash scripts use `set -euo pipefail`
