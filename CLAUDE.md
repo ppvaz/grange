@@ -183,6 +183,7 @@ Each `test_*` function in `tests/*_test.sh` runs in its own bash process. `new_p
 - All bash scripts use `set -euo pipefail`
 - Scripts run under `/bin/bash` (3.2 on macOS) and wrap agents in `timeout`, so aliases and functions from the user's interactive shell (e.g. a zsh `claude-cheap`) are invisible. Anything grange invokes must be an executable on PATH
 - Scripts are symlinked into projects; find grange's own files via `readlink -f "$0"`, not `dirname "$0"`
+- Shutdown uses `stop_descendants` (`lib/procs.sh`), never `kill 0` or process-group sweeps: `timeout` gives every agent its own group, and reap.sh/grow.sh share one, so group kills both orphan agents and kill the parent
 - File watching: `inotifywait` on Linux, `fswatch` on macOS
 - Locking: mkdir-based atomic locks (macOS-compatible, no flock dependency)
 - Dashboard: Go binary at `dashboard/grange-dashboard`, serves on port 3000+

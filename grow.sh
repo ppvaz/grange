@@ -93,6 +93,7 @@ fi
 # Agent configuration
 # SMART_AGENTS run CLAUDE_SMART_CMD, the rest run CLAUDE_CHEAP_CMD
 source "$SCRIPT_DIR/lib/claude-cmd.sh"
+source "$SCRIPT_DIR/lib/procs.sh"
 SMART_AGENTS="${SMART_AGENTS:-Oracle,Visionary}"
 CLAUDE_DEBUG="${CLAUDE_DEBUG:-false}"
 
@@ -1351,19 +1352,7 @@ cleanup_and_exit() {
   log "${YELLOW}[Main]${NC} Shutting down..."
   # Clean up lock state before force-killing (traps won't fire after SIGKILL)
   rm -rf "$LOCK_DIR"/running_* "$LOCK_DIR"/agent_slot_* 2>/dev/null || true
-  # Kill all processes in our process group (graceful)
-  kill 0 2>/dev/null || true
-  # Brief grace period then force-kill stragglers (skip ourselves)
-  sleep 1
-  local pgid
-  pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') || true
-  if [[ -n "$pgid" ]]; then
-    local pids
-    pids=$(pgrep -g "$pgid" 2>/dev/null | grep -v "^$$$" || true)
-    if [[ -n "$pids" ]]; then
-      echo "$pids" | xargs kill -9 2>/dev/null || true
-    fi
-  fi
+  stop_descendants
   exit 0
 }
 

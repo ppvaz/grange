@@ -59,6 +59,8 @@ STAGE_CHECKPOINTS=(
 
 NUM_STAGES=${#STAGE_IDS[@]}
 
+source "$(cd "$(dirname "$(readlink -f "$0")")" && pwd)/lib/procs.sh"
+
 # macOS detection (matches grow.sh)
 IS_MACOS=false
 [[ "$(uname)" == "Darwin" ]] && IS_MACOS=true
@@ -616,22 +618,9 @@ handle_interrupt() {
   echo ""
   log "${YELLOW}[IKE]${NC} Interrupted. Cleaning up child processes..."
 
-  # Kill entire process group (grow.sh children, watchers, claude agents)
-  kill -- -$$ 2>/dev/null || true
+  stop_descendants
   # Also explicitly kill any grow.sh processes for our work dir
   kill_stale_grow "${WORK_DIR:-.}" 2>/dev/null || true
-
-  # Force-kill stragglers (claude processes can be slow to shut down)
-  sleep 1
-  local pgid
-  pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') || true
-  if [[ -n "$pgid" ]]; then
-    local pids
-    pids=$(pgrep -g "$pgid" 2>/dev/null | grep -v "^$$\$" || true)
-    if [[ -n "$pids" ]]; then
-      echo "$pids" | xargs kill -9 2>/dev/null || true
-    fi
-  fi
 
   log "${YELLOW}      ${NC} Resume with: $0 resume ${WORK_DIR:-.}"
   exit 130
