@@ -123,8 +123,8 @@ Structure:
 ## Environment
 
 - `.env` holds API keys: `ANTHROPIC_API_KEY` (for smart agents), plus any other provider keys
-- `SMART_AGENTS` env var controls which agents use Opus vs cheap model (default: `Oracle,Visionary`)
-- `claude` = regular Claude CLI, `claude-cheap` = alias for cheaper model (defined in ~/.bashrc)
+- `SMART_AGENTS` env var controls which agents use the smart vs cheap tier (default: `Oracle,Visionary`)
+- `CLAUDE_SMART_CMD` (default `claude`) and `CLAUDE_CHEAP_CMD` (default `claude-cheap`) set each tier's command, e.g. `CLAUDE_CHEAP_CMD="claude --model claude-sonnet-5-5"`. Resolved in `lib/claude-cmd.sh`; `grow.sh start`, `digest.sh` and `distill.sh` refuse to run if the command isn't an executable on PATH
 
 ## Agile Vibe Code Configuration
 
@@ -172,6 +172,8 @@ Presets that configure multiple variables at once. Individual `ENABLE_*` vars ca
 ## Development Notes
 
 - All bash scripts use `set -euo pipefail`
+- Scripts run under `/bin/bash` (3.2 on macOS) and wrap agents in `timeout`, so aliases and functions from the user's interactive shell (e.g. a zsh `claude-cheap`) are invisible. Anything grange invokes must be an executable on PATH
+- Scripts are symlinked into projects; find grange's own files via `readlink -f "$0"`, not `dirname "$0"`
 - File watching: `inotifywait` on Linux, `fswatch` on macOS
 - Locking: mkdir-based atomic locks (macOS-compatible, no flock dependency)
 - Dashboard: Go binary at `dashboard/grange-dashboard`, serves on port 3000+

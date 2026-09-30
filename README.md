@@ -143,7 +143,7 @@ Scripts and directories are symlinked so updates to the toolkit propagate automa
 - Bash
 - `claude` CLI
 - `inotifywait` (Linux) or `fswatch` (macOS) for file watching
-- `claude-cheap` CLI alias configured for a cost-efficient model — see `.env.example`
+- A cost-efficient command for the cheap tier: a `claude-cheap` executable on PATH, or `CLAUDE_CHEAP_CMD` — see `.env.example`
 
 ## grow.sh — Autonomous Agent Orchestration
 
@@ -216,7 +216,15 @@ In **pair mode**, the Executor runs as an interactive Claude Code session — th
 
 ### Dual-API routing
 
-All agents use the `claude` CLI. By default, high-stakes agents use `claude` (smart model) while iterative agents use `claude-cheap` (configurable cost-efficient model) for cost efficiency. Control with `SMART_AGENTS`:
+All agents use the `claude` CLI. By default, high-stakes agents use `claude` (smart model) while iterative agents use `claude-cheap` (configurable cost-efficient model) for cost efficiency. Override either tier's command with `CLAUDE_SMART_CMD` / `CLAUDE_CHEAP_CMD` — it must be an executable, since shell aliases and functions aren't visible to grange:
+
+```bash
+# .env
+CLAUDE_SMART_CMD="claude --model claude-opus-5-5"
+CLAUDE_CHEAP_CMD="claude --model claude-sonnet-5-5"
+```
+
+Control which agents are smart with `SMART_AGENTS`:
 
 ```bash
 # Default: Oracle and Visionary use smart model, rest use cheap model

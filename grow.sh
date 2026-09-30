@@ -3,7 +3,9 @@
 # Agents react to file changes instead of polling on timers
 #
 # Environment variables:
-#   SMART_AGENTS     - Agents using regular claude (default: "Oracle,Visionary")
+#   SMART_AGENTS     - Agents using CLAUDE_SMART_CMD (default: "Oracle,Visionary")
+#   CLAUDE_SMART_CMD - Command for smart agents (default: "claude")
+#   CLAUDE_CHEAP_CMD - Command for other agents (default: "claude-cheap")
 #   CLAUDE_DEBUG     - Enable debug logging (default: true)
 #   CLAUDE_DEBUG     - Enable debug logging (default: true)
 #   AGENT_TIMEOUT    - Default timeout in seconds (default: 600)
@@ -89,7 +91,8 @@ elif [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 # Agent configuration
-# SMART_AGENTS use regular 'claude', others use 'claude-cheap' (defined in ~/.bashrc)
+# SMART_AGENTS run CLAUDE_SMART_CMD, the rest run CLAUDE_CHEAP_CMD
+source "$SCRIPT_DIR/lib/claude-cmd.sh"
 SMART_AGENTS="${SMART_AGENTS:-Oracle,Visionary}"
 CLAUDE_DEBUG="${CLAUDE_DEBUG:-false}"
 
@@ -585,9 +588,11 @@ $raw_prompt"
   echo "=== Run started at $(date) ===" >> "$agent_log"
 
   # Determine base command and sleep-mode permissions
-  local claude_cmd="claude"
-  if [[ "$is_smart_agent" != true ]]; then
-    claude_cmd="claude-cheap"
+  local tier="cheap"
+  local -a claude_cmd=("${CLAUDE_CHEAP[@]}")
+  if [[ "$is_smart_agent" == true ]]; then
+    tier="smart"
+    claude_cmd=("${CLAUDE_SMART[@]}")
   fi
 
   local skip_perms=""
@@ -599,24 +604,18 @@ $raw_prompt"
     # INTERACTIVE PAIR MODE — human navigates, agent pilots
     if [[ "$PAIR_STYLE" == "plan" ]]; then
       log "${BLUE}[$name]${NC} Running interactively with --permission-mode plan..."
-      $claude_cmd --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
+      "${claude_cmd[@]}" --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
         --permission-mode plan "$prompt" 2>&1 | tee -a "$agent_log" || cmd_result=$?
     else
       # Default: full interactive
       log "${BLUE}[$name]${NC} Running interactively (human in the loop)..."
-      $claude_cmd --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
+      "${claude_cmd[@]}" --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
         "$prompt" 2>&1 | tee -a "$agent_log" || cmd_result=$?
     fi
-  elif [[ "$is_smart_agent" == true ]]; then
-    log "${BLUE}[$name]${NC} Running with claude (timeout: ${timeout}s)..."
-    (
-      run_with_timeout "$timeout" claude --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
-        $skip_perms -p "$prompt" < /dev/null
-    ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   else
-    log "${BLUE}[$name]${NC} Running with claude-cheap (timeout: ${timeout}s)..."
+    log "${BLUE}[$name]${NC} Running on $tier tier (timeout: ${timeout}s)..."
     (
-      run_with_timeout "$timeout" claude-cheap --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
+      run_with_timeout "$timeout" "${claude_cmd[@]}" --allowedTools "Read,Edit,Write,Bash,Glob,Grep" \
         $skip_perms -p "$prompt" < /dev/null
     ) 2>&1 | _agent_tee "$LOG_FILE" "$agent_log" || cmd_result=$?
   fi
@@ -1397,10 +1396,9 @@ main() {
     fi
   fi
   
-  if ! command -v claude &> /dev/null; then
-    log "${RED}[Error]${NC} claude CLI not found"
-    exit 1
-  fi
+  # Both tiers: digest.sh always uses the cheap one, even if SMART_AGENTS covers every agent
+  require_claude_cmd CLAUDE_SMART_CMD
+  require_claude_cmd CLAUDE_CHEAP_CMD
   
   if check_done; then
     log "${GREEN}[Main]${NC} DONE.md already exists. Vision was achieved!"

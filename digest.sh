@@ -20,7 +20,9 @@ if [[ -f "$WORK_DIR/.env" ]]; then
   set +a
 fi
 
-# Using claude-cheap alias (MiniMax) - no API key needed here
+GRANGE_HOME="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+source "$GRANGE_HOME/lib/claude-cmd.sh"
+require_claude_cmd CLAUDE_CHEAP_CMD
 
 # Observation files to digest
 OBSERVATION_FILES=(
@@ -180,9 +182,8 @@ main() {
 
   log "${BLUE}[Digest]${NC} Compiling digest from observation files..."
 
-  # Call Claude via MiniMax (claude-cheap)
   local result
-  if result=$(claude-cheap -p "$prompt" 2>&1); then
+  if result=$("${CLAUDE_CHEAP[@]}" -p "$prompt" 2>&1); then
     # Write output to HUMAN_DIGEST.md (append with separator)
     {
       echo ""

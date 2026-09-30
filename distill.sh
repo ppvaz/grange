@@ -36,7 +36,9 @@ if [[ -f "$WORK_DIR/.env" ]]; then
   set +a
 fi
 
-# Using claude-cheap alias (MiniMax) - no API key needed here
+GRANGE_HOME="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+source "$GRANGE_HOME/lib/claude-cmd.sh"
+require_claude_cmd CLAUDE_CHEAP_CMD
 
 # Colors for logging
 BLUE='\033[0;34m'
@@ -64,13 +66,13 @@ usage() {
   exit 0
 }
 
-# Call claude-cheap with retry
+# Call the cheap-tier claude with retry
 call_llm() {
   local prompt=$1
   local attempt
   for attempt in 1 2 3; do
     local result
-    if result=$(claude-cheap -p "$prompt" 2>&1); then
+    if result=$("${CLAUDE_CHEAP[@]}" -p "$prompt" 2>&1); then
       echo "$result"
       return 0
     fi
