@@ -241,7 +241,7 @@ Suggested tiers, checked 2026-09-30. Lineups change often, so confirm what your 
 |---------|-----------|------------|-------------------|
 | Claude Code | `claude:claude-opus-5-5@high` | `claude:claude-sonnet-5-5` | `--effort` (low … max) |
 | Codex | `codex:gpt-6-astra@high` (Pro plan; on Plus, `codex:gpt-6.1-sol@xhigh`) | `codex:gpt-6.1-sol@medium` | `-c model_reasoning_effort=…` (levels vary by model) |
-| Antigravity | `agy:gemini-3.1-pro-high` | `agy:gemini-3.8-flash-medium` | `--effort`; Gemini IDs already carry it (`-low`/`-medium`/`-high`), so leave `@effort` off |
+| Antigravity | `agy:gemini-3.8-flash-high` | `agy:gemini-3.8-flash-medium` | `--effort`; Gemini IDs already carry it (`-low`/`-medium`/`-high`), so leave `@effort` off |
 | OpenCode | a strong model from a provider you've logged into, e.g. `opencode:opencode/claude-opus-5-5` (Zen) | e.g. `opencode:opencode/gpt-6.1-sol` (Zen) | `--variant` |
 
 - Pin full model IDs rather than aliases like `opus`: some aliases resolve to older models on Bedrock and Vertex.
