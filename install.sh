@@ -24,3 +24,12 @@ else
     echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc"
   fi
 fi
+
+# Build the orchestrator now rather than on the first grow/reap run
+if command -v go &>/dev/null; then
+  (cd "$GRANGE_HOME" && go build -o bin/grange ./cmd/grange)
+  echo "Built: $GRANGE_HOME/bin/grange"
+else
+  echo
+  echo "Go not found: grow.sh and reap.sh need it to build bin/grange (https://go.dev/dl)"
+fi

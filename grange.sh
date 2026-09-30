@@ -9,6 +9,7 @@
 #   grange adopt [directory]  Bring grange into an existing project
 #   grange eject [directory]  Remove grange from a completed project
 #   grange dashboard [directory]  Launch the dashboard for a project
+#   grange grow|reap ...      Run grow or reap here (same as ./grow.sh, ./reap.sh)
 #   grange help               Show this help
 
 set -euo pipefail
@@ -27,6 +28,9 @@ Commands:
   dashboard [dir]   Launch the dashboard for a project (default: current dir)
   dashboard --all [dir]  Launch multi-project overview dashboard
   status [dir]      Show status of all grange projects in a directory
+  grow [cmd]        Run grow in the current project (same as ./grow.sh)
+  reap <cmd>        Run reap in the current directory (same as ./reap.sh)
+  agent check       Show which agent CLI and model each role uses
   help              Show this help
 
 Examples:
@@ -658,6 +662,9 @@ case "${1:-}" in
     ;;
   status)
     cmd_status "${2:-}"
+    ;;
+  grow|reap|digest|agent)
+    exec "$GRANGE_HOME/lib/launch.sh" "$@"
     ;;
   help|--help|-h)
     usage
