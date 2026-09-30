@@ -32,7 +32,7 @@ agents_stopped() {
 
 test_ctrl_c_on_grow_stops_running_agents() {
   new_project
-  export STUB_BODY='exec sleep 300' CLAUDE_CHEAP_CMD=claude
+  export STUB_BODY='exec sleep 300'
   start_as_foreground_job ./grow.sh start
   wait_for 30 agent_started
   ctrl_c
@@ -41,7 +41,7 @@ test_ctrl_c_on_grow_stops_running_agents() {
 
 test_ctrl_c_on_reap_stops_running_agents() {
   new_project
-  export STUB_BODY='exec sleep 300' CLAUDE_CHEAP_CMD=claude
+  export STUB_BODY='exec sleep 300'
   start_as_foreground_job ./reap.sh start "$PROJECT"
   wait_for 30 agent_started
   ctrl_c

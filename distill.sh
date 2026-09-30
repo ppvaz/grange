@@ -37,8 +37,9 @@ if [[ -f "$WORK_DIR/.env" ]]; then
 fi
 
 GRANGE_HOME="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-source "$GRANGE_HOME/lib/claude-cmd.sh"
-require_claude_cmd CLAUDE_CHEAP_CMD
+GRANGE="$GRANGE_HOME/lib/launch.sh"
+# Model calls go through grange, which knows the configured backend
+backend_check=$("$GRANGE" agent check Distill) || { echo "$backend_check" >&2; exit 1; }
 
 # Colors for logging
 BLUE='\033[0;34m'
@@ -66,20 +67,22 @@ usage() {
   exit 0
 }
 
-# Call the cheap-tier claude with retry
+# Ask the Distill role's backend (GRANGE_CHEAP unless GRANGE_AGENT_DISTILL), with retry.
+# Only the answer reaches stdout; errors go to a log so they're never parsed as output.
 call_llm() {
   local prompt=$1
+  local errors="$STATE_DIR/llm-errors.log"
   local attempt
   for attempt in 1 2 3; do
     local result
-    if result=$("${CLAUDE_CHEAP[@]}" -p "$prompt" 2>&1); then
+    if result=$(printf '%s' "$prompt" | "$GRANGE" agent run --role Distill 2>> "$errors"); then
       echo "$result"
       return 0
     fi
     log "${YELLOW}[Distill]${NC} LLM call failed (attempt $attempt/3), retrying..."
     sleep $((attempt * 2))
   done
-  log "${RED}[Distill]${NC} LLM call failed after 3 attempts"
+  log "${RED}[Distill]${NC} LLM call failed after 3 attempts; see $errors"
   return 1
 }
 
