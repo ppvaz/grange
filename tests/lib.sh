@@ -2,10 +2,10 @@
 
 GRANGE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-# Creates a throwaway grange project at $PROJECT and cds into it. The only
-# `claude` on PATH is a stub that appends its PID to $STUB_PIDS and its args
-# to $STUB_LOG, then evals $STUB_BODY. claude-cheap is kept off PATH so every
-# machine sees the same default config.
+# Creates a throwaway grange project at $PROJECT and cds into it. Every agent
+# CLI (claude, codex, agy, opencode) on PATH is a stub that appends its PID to
+# $STUB_PIDS and "<name> <args>" to $STUB_LOG, then evals $STUB_BODY.
+# claude-cheap is kept off PATH so every machine sees the same default config.
 new_project() {
   TMP=$(mktemp -d)
   trap cleanup_project EXIT
@@ -18,10 +18,13 @@ new_project() {
   cat > "$TMP/bin/claude" <<'EOF'
 #!/bin/bash
 echo $$ >> "$STUB_PIDS"
-printf '%s\n' "$*" >> "$STUB_LOG"
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$STUB_LOG"
 eval "${STUB_BODY:-}"
 EOF
   chmod +x "$TMP/bin/claude"
+  for cli in codex agy opencode; do
+    ln -s claude "$TMP/bin/$cli"
+  done
 
   local dir path="$TMP/bin"
   local -a dirs
@@ -67,4 +70,13 @@ wait_for() {
     (( SECONDS < deadline )) || fail "timed out waiting for: $*"
     sleep 0.2
   done
+}
+
+grange() {
+  "$GRANGE/lib/launch.sh" "$@"
+}
+
+# Stub body that writes $1 to the answer file named in a `grange agent run` prompt
+answer_with() {
+  printf 'printf %%s %q > "$(printf %%s "$*" | sed -nE %q)"' "$1" 's/.*to the file (.+)\. Don.t create.*/\1/p'
 }

@@ -172,11 +172,12 @@ Presets that configure multiple variables at once. Individual `ENABLE_*` vars ca
 ## Tests
 
 ```bash
-tests/run.sh                        # all tests (~5s, runs on the host, no deps)
-tests/run.sh claude_cmd_test.sh     # one file
+go test ./... && tests/run.sh       # everything (runs on the host; needs Go)
+tests/run.sh agent_test.sh          # one end-to-end file
 ```
 
-Each `test_*` function in `tests/*_test.sh` runs in its own bash process. `new_project` (in `tests/lib.sh`) builds a throwaway project whose only `claude` is a stub recording its PID/args, so tests never hit a real model. Drive the real scripts end to end rather than sourcing their internals.
+- `go test ./...` — unit tests for the Go orchestrator (`cmd/`, `internal/`).
+- `tests/run.sh` — end-to-end: each `test_*` function in `tests/*_test.sh` runs in its own bash process. `new_project` (in `tests/lib.sh`) builds a throwaway project where every agent CLI (claude, codex, agy, opencode) is a stub recording its PID/args, so tests never hit a real model. Drive the real scripts/binary rather than sourcing internals.
 
 ## Development Notes
 

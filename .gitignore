@@ -20,3 +20,6 @@ specs/patterns/*
 
 # Dashboard build artifacts
 dashboard/grange-dashboard
+
+# Go binary (built by lib/launch.sh)
+bin/
