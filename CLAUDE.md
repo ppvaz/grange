@@ -139,11 +139,12 @@ Structure:
 
 ## Environment
 
-- `.env` holds API keys: `ANTHROPIC_API_KEY` (for smart agents), plus any other provider keys
-- `GRANGE_SMART` / `GRANGE_CHEAP` pick each tier's backend as `backend[:model]`: `claude`, `codex`, `agy` or `opencode`, e.g. `GRANGE_CHEAP=codex:gpt-5.5`, `GRANGE_SMART=claude:claude-opus-5-5`, `opencode:anthropic/claude-sonnet-5-5` (default: `claude` for both)
-- `SMART_AGENTS` lists roles on the smart tier (default: `Oracle,Visionary`); `GRANGE_AGENT_<ROLE>` overrides one role (`EXECUTOR`, `PLANNER`, `GAP`, `ORACLE`, `VISIONARY`, `DIGEST`, `DISTILL`)
+- `.env` holds grange settings (backends, modes, gates). Each agent CLI uses its own login or API key; grange passes the environment through untouched
+- `GRANGE_SMART` / `GRANGE_CHEAP` pick each tier's backend as `backend[:model][@effort]`: `claude`, `codex`, `agy` or `opencode`, e.g. `GRANGE_SMART=claude:claude-opus-5-5@high`, `GRANGE_CHEAP=codex:gpt-6.1-sol@medium` (default: `claude` for both). `@effort` maps to `--effort` (claude, agy), `-c model_reasoning_effort=` (codex) or `--variant` (opencode); only known effort words count after the last `@`
+- `SMART_AGENTS` lists roles on the smart tier (default: `Oracle,Visionary`); `GRANGE_AGENT_<ROLE>` overrides one role (`EXECUTOR`, `PLANNER`, `GAP`, `ORACLE`, `VISIONARY`, `DIGEST`, `DISTILL`, `LENS`, `SYNTHESIS`)
+- Model IDs in docs are dated recommendations (README "Agent backends"). Never write an ID you haven't checked against the CLI (`codex debug models`, `agy models`, `opencode models`, `claude --help`) or the vendor's docs; tests use neutral IDs like `model-a`
 - Headless agents run with each CLI's auto-approve flag (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, `--auto`): they're unattended and need a shell anyway. Only point grange at code you'd let an agent loose on.
-- `grow.sh start` checks every backend is on PATH before doing anything; `lib/launch.sh agent check` shows the role-to-backend mapping
+- `grow.sh start` checks every backend is on PATH before doing anything; `grange agent check` shows the role-to-backend mapping
 - Values already in the environment win over `.env`
 
 ## Agile Vibe Code Configuration
@@ -175,9 +176,9 @@ Opt-in features inspired by XP + AI pair programming workflow. All backwards-com
 
 **Review Gate**: When enabled (`ENABLE_REVIEW_GATE=true` or `GROW_MODE=pair`), the Executor pauses whenever Visionary writes to VISION_REVIEW.md. The human reviews the observations and runs `touch .vision-reviewed` to resume. Signal files `.vision-review-pending` and `.vision-reviewed` are consumed automatically.
 
-**Interactive Pair Mode**: When `GROW_MODE=pair`, the Executor runs as an interactive Claude Code session — the human can see the agent's work in real-time, interrupt to redirect, provide context, or adjust the approach. The agent pilots (writes code), the human navigates (steers direction). With `PAIR_STYLE=plan`, the Executor starts in `--permission-mode plan` where it explores and proposes changes, and the human approves before execution. In both styles, the Executor runs in the foreground and does not auto-chain — remaining tasks are shown and the human decides when to continue.
+**Interactive Pair Mode**: When `GROW_MODE=pair` and stdin is a terminal, the Executor runs as an interactive session of its backend's CLI — the human can see the agent's work in real time, interrupt to redirect, provide context, or adjust the approach. The agent pilots (writes code), the human navigates (steers direction). With `PAIR_STYLE=plan`, the Executor starts in its CLI's plan mode (`--permission-mode plan`, `agy --mode plan`, `opencode --agent plan`; Codex has none, so the prompt asks for a plan first) and the human approves before execution. After each task grange lists what's left and asks whether to continue. Without a terminal (e.g. started from the dashboard), pair mode's Executor runs headless.
 
-**Sleep Mode Permissions**: When `GROW_MODE=sleep`, all agents run with `--dangerously-skip-permissions` for fully autonomous operation without permission prompts blocking execution.
+**Permissions**: Headless agents always run with their CLI's auto-approve flag, in every mode; `sleep` only turns the gates off.
 
 ## Grow Modes
 
@@ -187,7 +188,7 @@ Presets that configure multiple variables at once. Individual `ENABLE_*` vars ca
 |------|--------------|-------------|-------------------|----------------|----------|
 | `auto` (default) | per ENABLE_* | per ENABLE_* | Hash-based skip | Non-interactive | Custom configs |
 | `pair` | ON | ON | Always runs | Per `PAIR_STYLE` | Active development |
-| `sleep` | OFF | OFF | Hash-based skip | Non-interactive + `--dangerously-skip-permissions` | Overnight runs |
+| `sleep` | OFF | OFF | Hash-based skip | Non-interactive | Overnight runs |
 
 ## Tests
 
