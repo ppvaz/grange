@@ -645,7 +645,7 @@ case "${1:-}" in
     ;;
   dashboard)
     if [[ "${2:-}" == "--all" || "${2:-}" == "-a" ]]; then
-      local scan_dir="${3:-}"
+      scan_dir="${3:-}"
       if [[ -z "$scan_dir" ]]; then
         if [[ -L "./grow.sh" ]]; then
           scan_dir="$(cd .. && pwd)"
