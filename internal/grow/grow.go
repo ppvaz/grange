@@ -181,9 +181,22 @@ func (g *Grow) afterCommits(ctx context.Context, before, after string) {
 	}
 }
 
+// Job is one agent run. Name labels its log and running marker; Role picks
+// the backend. They differ when one role runs several jobs (reap's lenses).
+type Job struct {
+	Name, Role, Prompt string
+	Timeout            time.Duration
+	Interactive        bool
+}
+
 // Agent runs one role and records the run the way the dashboard reads it.
 func (g *Grow) Agent(ctx context.Context, role, prompt string, timeout time.Duration, interactive bool) error {
-	spec := g.cfg.SpecFor(role)
+	return g.RunJob(ctx, Job{Name: role, Role: role, Prompt: prompt, Timeout: timeout, Interactive: interactive})
+}
+
+func (g *Grow) RunJob(ctx context.Context, j Job) error {
+	role, prompt, timeout, interactive := j.Name, j.Prompt, j.Timeout, j.Interactive
+	spec := g.cfg.SpecFor(j.Role)
 	defer g.ws.MarkRunning(role)()
 
 	logFile, err := g.agentLog(role)

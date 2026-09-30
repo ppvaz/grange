@@ -27,6 +27,7 @@ The orchestrator is a Go binary (`cmd/grange`, stdlib only). `grow.sh` and `dige
 | `internal/config` | `.env` loading, grow-mode presets, which backend each role uses |
 | `internal/workspace` | PLAN.md tasks, `.locks/` counters and running markers (the dashboard reads these), LOG.md, git |
 | `internal/grow` | The loop, gates, CI, digest, and the agent prompts (`internal/grow/prompts/*.md`, embedded) |
+| `internal/reap` | The six IKE stages, `.ike-state` (plain `KEY=value`, unquoted: the dashboard reads it raw), checkpoints |
 
 ### Agent System (grow.sh)
 
@@ -47,13 +48,15 @@ Three turns in a row without progress (no new commit, no task checked, no fix ta
 
 ### IKE Pipeline (reap.sh)
 
-6 stages with human checkpoints between each:
-- **0a**: Parallel lens analysis (BA, PM, QA) → `recon/lens-*.md`
-- **0b**: Synthesize lenses → `recon/synthesis.md`
-- **1a**: Extract entities, rules, flows, integrations → `knowledge/`
-- **1b**: Generate atomic prompts + risk review → `knowledge/prompts/`
-- **2a**: Build from prompts → `src/`, `tests/`
-- **2b**: Verify implementation → `REBUILD-COMPLETE.md`
+6 stages with human checkpoints between each. Each stage's `VISION.md` comes from `visions/ike-v3/`:
+- **0a**: Three lens jobs (BA, PM, QA) in parallel, role `Lens` → `recon/lens-*.md`. The lens agents don't commit (three agents would fight over git's index lock); reap commits all three after.
+- **0b**: One job does the whole stage, role `Synthesis` → `recon/synthesis.md`, `recon/VISION-stage1-extraction.md`
+- **1a**: Grow loop on the extraction spec from 0b → `knowledge/`
+- **1b**: Grow loop → `knowledge/prompts/`, `EXTRACTION-COMPLETE.md`
+- **2a**: Grow loop in `BUILD_DIR` (asks for the target stack, or `--stack`) → `src/`, `tests/`
+- **2b**: Grow loop → `docs/REBUILD-COMPLETE.md`
+
+A stage is complete only when its required outputs exist (`internal/reap/stages.go`); for grow-loop stages the Oracle's `DONE.md` is necessary but not sufficient. After a stage, reap prompts `[Enter]/r/q` on a terminal and otherwise stops, printing the `./reap.sh resume` command. Target codebases are passed to agents as extra readable dirs (`--add-dir` where the CLI has one) and are read-only by prompt only.
 
 ## CLI
 
@@ -202,6 +205,6 @@ tests/run.sh agent_test.sh          # one end-to-end file
 - Headless agents get their own process group (`internal/agent/exec.go`); a timeout, shutdown or normal exit kills the whole group, so MCP/dev servers an agent started don't outlive it. Interactive (pair) agents share grange's group so their UI owns the terminal; Ctrl+C then goes to the agent, not grange
 - Agent CLIs are found on PATH, so aliases and functions from the user's interactive shell (e.g. a zsh `claude-cheap`, or `codex` aliased with extra flags) are invisible. Grange passes its own flags per backend. `/bin/bash` is 3.2 on macOS; keep the remaining scripts compatible
 - Scripts are symlinked into projects; find grange's own files via `readlink -f "$0"`, not `dirname "$0"`
-- Shutdown uses `stop_descendants` (`lib/procs.sh`), never `kill 0` or process-group sweeps: `timeout` gives every agent its own group, and reap.sh/grow.sh share one, so group kills both orphan agents and kill the parent
+- Detect a terminal with `workspace.IsTerminal` (a termios ioctl), never `os.ModeCharDevice`: `/dev/null` is a character device, and the dashboard starts grange with it as stdin. Getting this wrong makes reap skip its checkpoints and pair mode start a UI with no terminal
 - Dashboard: Go binary at `dashboard/grange-dashboard`, serves on port 3000+
 - Symlink architecture means toolkit updates propagate to all adopted projects automatically

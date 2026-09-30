@@ -25,6 +25,7 @@ type Settings struct {
 	PairTimeout      time.Duration
 	AgentTimeout     time.Duration
 	OracleTimeout    time.Duration
+	JobTimeout       time.Duration // reap's one-shot jobs (lenses, synthesis)
 
 	Smart       agent.Spec
 	Cheap       agent.Spec
@@ -45,6 +46,7 @@ func Load() (Settings, error) {
 		PairTimeout:      envSeconds("PAIR_TIMEOUT", 3600),
 		AgentTimeout:     envSeconds("AGENT_TIMEOUT", 600),
 		OracleTimeout:    envSeconds("ORACLE_TIMEOUT", 1800),
+		JobTimeout:       envSeconds("REAP_JOB_TIMEOUT", 1800),
 		SmartAgents:      splitList(env("SMART_AGENTS", "Oracle,Visionary")),
 		overrides:        map[string]agent.Spec{},
 	}

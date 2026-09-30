@@ -91,3 +91,14 @@ func TestOpenRemovesLegacyHookOnly(t *testing.T) {
 		t.Errorf("hook = %q, want only the user's part %q", got, own)
 	}
 }
+
+func TestIsTerminalRejectsDevNull(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if IsTerminal(f) {
+		t.Error("/dev/null is a character device, not a terminal")
+	}
+}

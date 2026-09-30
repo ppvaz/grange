@@ -1,5 +1,6 @@
 # tests/fake_agent.sh - Sourced by the stub agent CLI (STUB_BODY=$FAKE_AGENT):
-# plays each grange role just well enough to drive grow's loop. "$*" is the
+# plays each grange role just well enough to drive grow's loop and reap's
+# first stages. "$*" is the
 # CLI's argv, prompt included. ORACLE_FAILS_ONCE makes the first verdict fail.
 prompt="$*"
 case "$prompt" in
@@ -13,6 +14,18 @@ case "$prompt" in
     perl -pi -e 's/- \[ \]/- [x]/ && $done++ unless $done' PLAN.md
     git add -A
     git commit --quiet --message "Do: $task"
+    ;;
+  *"lens of Stage 0a"*)
+    file=$(printf '%s' "$prompt" | sed -E -e 's/.*Write your analysis to ([^,]+), following.*/\1/' -e t -e d)
+    mkdir -p recon
+    echo "# Findings" > "$file"
+    ;;
+  *"You are doing Stage 0b"*)
+    mkdir -p recon
+    echo "# Synthesis" > recon/synthesis.md
+    printf '# Vision: Extraction\n\n## Done When\n- [ ] knowledge/ is populated\n' > recon/VISION-stage1-extraction.md
+    git add recon
+    git commit --quiet --message "recon: synthesis"
     ;;
   *"You are the Oracle agent"*)
     verdict=$(printf '%s' "$prompt" | sed -E -e 's/.*write it as JSON to ([^,]+), with exactly.*/\1/' -e t -e d)

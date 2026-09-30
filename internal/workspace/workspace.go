@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -21,6 +22,8 @@ type Workspace struct {
 	Dir   string
 	Locks string
 	Log   *Logger
+
+	counters sync.Mutex // reap runs agents in parallel
 }
 
 // Open prepares dir for a run: required files, .locks/, and no stale state
@@ -123,6 +126,8 @@ func (w *Workspace) SetCounter(name string, n int) {
 }
 
 func (w *Workspace) AddCounter(name string, delta int) int {
+	w.counters.Lock()
+	defer w.counters.Unlock()
 	n := w.Counter(name) + delta
 	w.SetCounter(name, n)
 	return n
@@ -139,9 +144,7 @@ func (w *Workspace) MarkRunning(name string) func() {
 	w.AddCounter("agent_count", 1)
 	return func() {
 		_ = os.RemoveAll(marker)
-		if w.AddCounter("agent_count", -1) < 0 {
-			w.SetCounter("agent_count", 0)
-		}
+		w.AddCounter("agent_count", -1)
 	}
 }
 

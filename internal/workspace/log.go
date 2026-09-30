@@ -64,8 +64,3 @@ func (w lockedWriter) Write(p []byte) (int, error) {
 	defer w.l.mu.Unlock()
 	return w.l.file.Write(p)
 }
-
-func IsTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
