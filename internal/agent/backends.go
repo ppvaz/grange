@@ -8,12 +8,13 @@ import (
 	"strings"
 )
 
-// Spec names a backend and, optionally, the model it should use. It is
-// written "backend" or "backend:model", e.g. "codex:gpt-5.5" or
-// "opencode:anthropic/claude-sonnet-5-5".
+// Spec names a backend and, optionally, the model and reasoning effort it
+// should use, written "backend[:model][@effort]", e.g. "codex:gpt-6.1-sol@low"
+// or "claude:claude-opus-5-5@high".
 type Spec struct {
 	Backend string
 	Model   string
+	Effort  string
 }
 
 // Invocation is what one agent run should do, independent of the backend.
@@ -29,59 +30,61 @@ type Invocation struct {
 }
 
 type backend struct {
-	headless    func(model string, inv Invocation) []string
-	interactive func(model string, inv Invocation) []string
+	effort  func(level string) []string
+	addDirs bool // has --add-dir
+	// opts are the model, effort and extra-dir flags
+	headless    func(inv Invocation, opts []string) []string
+	interactive func(inv Invocation, opts []string) []string
 }
 
 // Headless runs auto-approve everything: grange agents work unattended and
 // already need shell access, so a per-tool allowlist buys nothing.
 var backends = map[string]backend{
 	"claude": {
-		headless: func(model string, inv Invocation) []string {
-			args := []string{"-p", inv.Prompt, "--dangerously-skip-permissions"}
-			return append(args, common(model, "--model", inv.AddDirs, "--add-dir")...)
+		effort:  func(level string) []string { return []string{"--effort", level} },
+		addDirs: true,
+		headless: func(inv Invocation, opts []string) []string {
+			return append([]string{"-p", inv.Prompt, "--dangerously-skip-permissions"}, opts...)
 		},
-		interactive: func(model string, inv Invocation) []string {
+		interactive: func(inv Invocation, opts []string) []string {
 			args := planOr(inv, []string{"--permission-mode", "plan"}, []string{"--dangerously-skip-permissions"})
-			args = append(args, common(model, "--model", inv.AddDirs, "--add-dir")...)
-			return append(args, inv.Prompt)
+			return append(append(args, opts...), inv.Prompt)
 		},
 	},
 	"codex": {
-		headless: func(model string, inv Invocation) []string {
+		// No effort flag; the config key can be overridden per run
+		effort:  func(level string) []string { return []string{"-c", fmt.Sprintf("model_reasoning_effort=%q", level)} },
+		addDirs: true,
+		headless: func(inv Invocation, opts []string) []string {
 			args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"}
-			args = append(args, common(model, "--model", inv.AddDirs, "--add-dir")...)
-			return append(args, inv.Prompt)
+			return append(append(args, opts...), inv.Prompt)
 		},
 		// Codex has no plan mode: keep its own approval prompts on and let the
 		// pair-mode prompt ask for a plan first
-		interactive: func(model string, inv Invocation) []string {
+		interactive: func(inv Invocation, opts []string) []string {
 			args := planOr(inv, nil, []string{"--dangerously-bypass-approvals-and-sandbox"})
-			args = append(args, common(model, "--model", inv.AddDirs, "--add-dir")...)
-			return append(args, inv.Prompt)
+			return append(append(args, opts...), inv.Prompt)
 		},
 	},
 	"agy": {
-		headless: func(model string, inv Invocation) []string {
-			args := []string{"--print", inv.Prompt, "--dangerously-skip-permissions"}
-			return append(args, common(model, "--model", inv.AddDirs, "--add-dir")...)
+		effort:  func(level string) []string { return []string{"--effort", level} },
+		addDirs: true,
+		headless: func(inv Invocation, opts []string) []string {
+			return append([]string{"--print", inv.Prompt, "--dangerously-skip-permissions"}, opts...)
 		},
-		interactive: func(model string, inv Invocation) []string {
+		interactive: func(inv Invocation, opts []string) []string {
 			args := planOr(inv, []string{"--mode", "plan"}, []string{"--dangerously-skip-permissions"})
-			args = append(args, common(model, "--model", inv.AddDirs, "--add-dir")...)
-			return append(args, "--prompt-interactive", inv.Prompt)
+			return append(append(args, opts...), "--prompt-interactive", inv.Prompt)
 		},
 	},
 	"opencode": {
-		headless: func(model string, inv Invocation) []string {
-			args := []string{"run", "--auto"}
-			args = append(args, common(model, "--model", nil, "")...)
-			return append(args, inv.Prompt)
+		effort: func(level string) []string { return []string{"--variant", level} },
+		headless: func(inv Invocation, opts []string) []string {
+			return append(append([]string{"run", "--auto"}, opts...), inv.Prompt)
 		},
-		interactive: func(model string, inv Invocation) []string {
+		interactive: func(inv Invocation, opts []string) []string {
 			args := planOr(inv, []string{"--agent", "plan"}, []string{"--auto"})
-			args = append(args, common(model, "--model", nil, "")...)
-			return append(args, "--prompt", inv.Prompt)
+			return append(append(args, opts...), "--prompt", inv.Prompt)
 		},
 	},
 }
@@ -93,16 +96,9 @@ func planOr(inv Invocation, plan, normal []string) []string {
 	return append([]string(nil), normal...)
 }
 
-func common(model, modelFlag string, dirs []string, dirFlag string) []string {
-	var args []string
-	if model != "" {
-		args = append(args, modelFlag, model)
-	}
-	for _, d := range dirs {
-		args = append(args, dirFlag, d)
-	}
-	return args
-}
+// effortLevels are the words any backend accepts as a reasoning effort. Only
+// these count after "@", so model IDs containing "@" (Vertex dates) survive.
+var effortLevels = map[string]bool{"none": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true, "ultra": true}
 
 // Backends lists the supported backend names.
 func Backends() []string {
@@ -114,28 +110,48 @@ func Backends() []string {
 	return names
 }
 
-// ParseSpec parses "backend" or "backend:model". Only the first colon splits,
+// ParseSpec parses "backend[:model][@effort]". Only the first colon splits,
 // so models may contain colons (e.g. "opencode:ollama/qwen3:32b").
 func ParseSpec(s string) (Spec, error) {
-	name, model, _ := strings.Cut(strings.TrimSpace(s), ":")
+	rest, effort := strings.TrimSpace(s), ""
+	if i := strings.LastIndex(rest, "@"); i >= 0 && effortLevels[rest[i+1:]] {
+		rest, effort = rest[:i], rest[i+1:]
+	}
+	name, model, _ := strings.Cut(rest, ":")
 	if _, ok := backends[name]; !ok {
 		return Spec{}, fmt.Errorf("unknown agent backend %q in %q (want one of: %s)", name, s, strings.Join(Backends(), ", "))
 	}
-	return Spec{Backend: name, Model: model}, nil
+	return Spec{Backend: name, Model: model, Effort: effort}, nil
 }
 
 func (s Spec) String() string {
-	if s.Model == "" {
-		return s.Backend
+	out := s.Backend
+	if s.Model != "" {
+		out += ":" + s.Model
 	}
-	return s.Backend + ":" + s.Model
+	if s.Effort != "" {
+		out += "@" + s.Effort
+	}
+	return out
 }
 
 // Args returns the command-line arguments (without the binary) for inv.
 func (s Spec) Args(inv Invocation) []string {
 	b := backends[s.Backend]
-	if inv.Interactive {
-		return b.interactive(s.Model, inv)
+	var opts []string
+	if s.Model != "" {
+		opts = append(opts, "--model", s.Model)
 	}
-	return b.headless(s.Model, inv)
+	if s.Effort != "" {
+		opts = append(opts, b.effort(s.Effort)...)
+	}
+	if b.addDirs {
+		for _, d := range inv.AddDirs {
+			opts = append(opts, "--add-dir", d)
+		}
+	}
+	if inv.Interactive {
+		return b.interactive(inv, opts)
+	}
+	return b.headless(inv, opts)
 }

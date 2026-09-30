@@ -18,15 +18,21 @@ func TestParseSpec(t *testing.T) {
 		in   string
 		want Spec
 	}{
-		{"claude", Spec{"claude", ""}},
-		{"codex:gpt-5.5", Spec{"codex", "gpt-5.5"}},
-		{" agy:gemini-3.1-pro-high ", Spec{"agy", "gemini-3.1-pro-high"}},
-		{"opencode:ollama/qwen3:32b", Spec{"opencode", "ollama/qwen3:32b"}},
+		{"claude", Spec{"claude", "", ""}},
+		{"claude@high", Spec{"claude", "", "high"}},
+		{"codex:model-a@low", Spec{"codex", "model-a", "low"}},
+		{" agy:model-b-high ", Spec{"agy", "model-b-high", ""}},
+		{"opencode:ollama/qwen3:32b", Spec{"opencode", "ollama/qwen3:32b", ""}},
+		{"opencode:vertex/model-c@20250805", Spec{"opencode", "vertex/model-c@20250805", ""}},
+		{"opencode:vertex/model-c@20250805@max", Spec{"opencode", "vertex/model-c@20250805", "max"}},
 	}
 	for _, tt := range tests {
 		got, err := ParseSpec(tt.in)
 		if err != nil || got != tt.want {
 			t.Errorf("ParseSpec(%q) = %v, %v; want %v", tt.in, got, err, tt.want)
+		}
+		if tt.in == "codex:model-a@low" && got.String() != "codex:model-a@low" {
+			t.Errorf("String() = %q", got.String())
 		}
 	}
 	if _, err := ParseSpec("claude-cheap"); err == nil || !strings.Contains(err.Error(), "want one of: agy, claude, codex, opencode") {
@@ -40,10 +46,12 @@ func TestHeadlessArgs(t *testing.T) {
 		spec Spec
 		want []string
 	}{
-		{Spec{"claude", "claude-sonnet-5-5"}, []string{"-p", "do it", "--dangerously-skip-permissions", "--model", "claude-sonnet-5-5", "--add-dir", "/target"}},
-		{Spec{"codex", "gpt-5.5"}, []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--model", "gpt-5.5", "--add-dir", "/target", "do it"}},
-		{Spec{"agy", ""}, []string{"--print", "do it", "--dangerously-skip-permissions", "--add-dir", "/target"}},
-		{Spec{"opencode", "anthropic/claude-sonnet-5-5"}, []string{"run", "--auto", "--model", "anthropic/claude-sonnet-5-5", "do it"}},
+		{Spec{"claude", "model-a", ""}, []string{"-p", "do it", "--dangerously-skip-permissions", "--model", "model-a", "--add-dir", "/target"}},
+		{Spec{"claude", "", "high"}, []string{"-p", "do it", "--dangerously-skip-permissions", "--effort", "high", "--add-dir", "/target"}},
+		{Spec{"codex", "model-b", ""}, []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--model", "model-b", "--add-dir", "/target", "do it"}},
+		{Spec{"codex", "model-b", "low"}, []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--model", "model-b", "-c", `model_reasoning_effort="low"`, "--add-dir", "/target", "do it"}},
+		{Spec{"agy", "", "medium"}, []string{"--print", "do it", "--dangerously-skip-permissions", "--effort", "medium", "--add-dir", "/target"}},
+		{Spec{"opencode", "provider/model-c", "max"}, []string{"run", "--auto", "--model", "provider/model-c", "--variant", "max", "do it"}},
 	}
 	for _, tt := range tests {
 		if got := tt.spec.Args(inv); !reflect.DeepEqual(got, tt.want) {

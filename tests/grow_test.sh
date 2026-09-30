@@ -50,16 +50,16 @@ test_approval_gate_holds_the_executor() {
 
 test_backends_follow_tiers_and_overrides() {
   new_project
-  printf '%s\n' 'GRANGE_SMART=agy:gemini-3.1-pro-high' 'GRANGE_CHEAP=codex:gpt-5.5' \
-    'GRANGE_AGENT_GAP=opencode:anthropic/claude-sonnet-5-5' > .env
+  printf '%s\n' 'GRANGE_SMART=agy:model-a' 'GRANGE_CHEAP=codex:model-b@low' \
+    'GRANGE_AGENT_GAP=opencode:provider/model-c@high' > .env
   export STUB_BODY="$FAKE_AGENT"
   timeout 60 ./grow.sh start > /dev/null 2>&1 || fail "grow.sh start failed: $(tail -5 LOG.md)"
   local log
   log=$(cat "$STUB_LOG")
   assert_contains "$log" "agy --print You are running non-interactively"
-  assert_contains "$log" "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.5"
-  assert_contains "$log" "opencode run --auto --model anthropic/claude-sonnet-5-5"
-  [[ "$(grep -c -- '--model gemini-3.1-pro-high' "$STUB_LOG")" -ge 2 ]] || fail "Visionary and Oracle should run on the smart tier"
+  assert_contains "$log" 'codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model model-b -c model_reasoning_effort="low"'
+  assert_contains "$log" "opencode run --auto --model provider/model-c --variant high"
+  [[ "$(grep -c -- '--model model-a' "$STUB_LOG")" -ge 2 ]] || fail "Visionary and Oracle should run on the smart tier"
 }
 
 test_start_fails_fast_when_a_backend_is_missing() {
@@ -87,7 +87,7 @@ test_digest_runs_on_the_digest_backend() {
   new_project
   echo "Blocked on credentials" > BLOCKERS.md
   export STUB_BODY="$(answer_with '# Human Digest')"
-  GRANGE_AGENT_DIGEST=codex:gpt-5.5-mini ./digest.sh > /dev/null 2>&1 || fail "digest.sh failed"
+  GRANGE_AGENT_DIGEST=codex:model-d ./digest.sh > /dev/null 2>&1 || fail "digest.sh failed"
   assert_contains "$(cat "$STUB_LOG")" "codex exec"
   assert_contains "$(cat HUMAN_DIGEST.md)" "# Human Digest"
   assert_contains "$(cat .locks/digest_markers)" "BLOCKERS.md:1"

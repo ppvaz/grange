@@ -14,8 +14,8 @@ func TestParseLine(t *testing.T) {
 		line, key, value string
 		ok               bool
 	}{
-		{"GRANGE_CHEAP=codex:gpt-5.5", "GRANGE_CHEAP", "codex:gpt-5.5", true},
-		{`export GRANGE_SMART="claude:claude-opus-5-5"`, "GRANGE_SMART", "claude:claude-opus-5-5", true},
+		{"GRANGE_CHEAP=codex:model-a@low", "GRANGE_CHEAP", "codex:model-a@low", true},
+		{`export GRANGE_SMART="claude:model-b"`, "GRANGE_SMART", "claude:model-b", true},
 		{"GROW_MODE=pair   # interactive", "GROW_MODE", "pair", true},
 		{`PATH_X="$HOME_DIR/bin"`, "PATH_X", "/home/x/bin", true},
 		{`LITERAL='$HOME_DIR # not a comment'`, "LITERAL", "$HOME_DIR # not a comment", true},
@@ -55,17 +55,17 @@ func TestLoadDotEnvPrefersProjectAndExistingEnv(t *testing.T) {
 }
 
 func TestSpecFor(t *testing.T) {
-	t.Setenv("GRANGE_SMART", "claude:claude-opus-5-5")
-	t.Setenv("GRANGE_CHEAP", "codex:gpt-5.5")
-	t.Setenv("GRANGE_AGENT_GAP", "opencode:anthropic/claude-sonnet-5-5")
+	t.Setenv("GRANGE_SMART", "claude:model-a@high")
+	t.Setenv("GRANGE_CHEAP", "codex:model-b@low")
+	t.Setenv("GRANGE_AGENT_GAP", "opencode:provider/model-c")
 	s, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	tests := map[string]agent.Spec{
-		"Oracle":   {Backend: "claude", Model: "claude-opus-5-5"},
-		"Executor": {Backend: "codex", Model: "gpt-5.5"},
-		"Gap":      {Backend: "opencode", Model: "anthropic/claude-sonnet-5-5"},
+		"Oracle":   {Backend: "claude", Model: "model-a", Effort: "high"},
+		"Executor": {Backend: "codex", Model: "model-b", Effort: "low"},
+		"Gap":      {Backend: "opencode", Model: "provider/model-c"},
 	}
 	for role, want := range tests {
 		if got := s.SpecFor(role); got != want {

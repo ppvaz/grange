@@ -21,8 +21,8 @@ test_agent_check_reports_missing_backend() {
   rm "$TMP/bin/codex"
   grange agent check > /dev/null  # build the binary while go is still on PATH
   local output
-  output=$(PATH="$TMP/bin:/usr/bin:/bin" GRANGE_CHEAP=codex:gpt-5.5 grange agent check Executor Oracle) && fail "codex should be missing"
-  assert_contains "$output" "Executor   codex:gpt-5.5"
+  output=$(PATH="$TMP/bin:/usr/bin:/bin" GRANGE_CHEAP=codex:model-b@low grange agent check Executor Oracle) && fail "codex should be missing"
+  assert_contains "$output" "Executor   codex:model-b@low"
   assert_contains "$output" "NOT FOUND on PATH"
   assert_contains "$output" "Oracle     claude"
 }
